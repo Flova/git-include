@@ -1,0 +1,341 @@
+# git-include
+
+**Vendor external git repositories as plain files — with full two-way sync.**
+
+`git-include` is a modern, single-binary alternative to
+[git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
+inlines an upstream repository into a subdirectory of your repository, plus one
+small marker file. That's the whole model:
+
+- **Collaborators need nothing.** They `git clone` and get working code. No
+  `--recursive`, no `submodule update`, no git-include installation required.
+  Only the person syncing with upstream needs the tool.
+- **Two-way sync.** `git include pull` merges new upstream work into your tree;
+  `git include push` sends your local commits back upstream — with their
+  original messages and authors, and without ever leaking the marker file.
+- **git-subrepo compatible.** The marker file is the same `.gitrepo` format.
+  You can adopt a repository that already uses git-subrepo, or hand one back.
+- **First-class Git LFS support**, painless **branch switching**, quick
+  **status/diff against upstream**, **nested includes**, and **tab completion**
+  out of the box.
+
+```console
+$ git include add https://github.com/example/widgets vendor/widgets
+$ git include status
+$ git include pull vendor/widgets      # get new upstream work
+$ git include push vendor/widgets      # contribute your changes back
+```
+
+---
+
+## Table of contents
+
+- [Why not submodules / subtree / subrepo?](#why-not-submodules--subtree--subrepo)
+- [Installation](#installation)
+- [Tab completion](#tab-completion)
+- [Quickstart](#quickstart)
+- [Command reference](#command-reference)
+- [The `.gitrepo` marker file](#the-gitrepo-marker-file)
+- [Git LFS](#git-lfs)
+- [Nested includes](#nested-includes)
+- [Handling merge conflicts](#handling-merge-conflicts)
+- [How it works](#how-it-works)
+- [FAQ](#faq)
+
+---
+
+## Why not submodules / subtree / subrepo?
+
+|                                      | submodule | subtree | subrepo | **git-include** |
+| ------------------------------------ | :-------: | :-----: | :-----: | :-------------: |
+| Plain `git clone` just works         |     ✗     |    ✓    |    ✓    |        ✓        |
+| Collaborators need no extra tool     |     ✗     |    ✓    |    ✓    |        ✓        |
+| Clean host history (no merge noise)  |     ✓     |    ✗    |    ✓    |        ✓        |
+| Two-way sync (pull *and* push)       |     ✓     |   (✓)   |    ✓    |        ✓        |
+| Individual commits pushed upstream   |     ✓     |    ✓    |    ✓    |        ✓        |
+| No hidden state outside the worktree |     ✗     |    ✗    |    ✓    |        ✓        |
+| Single static binary                 |    n/a    |   n/a   | ✗ (bash)|        ✓        |
+| Git LFS aware                        |     ✓     |    ✗    |    ✗    |        ✓        |
+| One-command branch switching         |     ✗     |    ✗    |    ✗    |        ✓        |
+| Status/diff against upstream         |     ✗     |    ✗    |   (✓)   |        ✓        |
+| Nested vendored repos                |     ✓     |    ✗    |   (✓)   |        ✓        |
+
+The fundamental idea is the same as git-subrepo: **the vendored code is just
+files in your repository**, and a marker file records where they came from and
+which upstream commit they correspond to. Everything else — merging, pushing,
+diffing — is derived from that.
+
+Compared to git-subrepo, git-include is a compiled binary (built on libgit2
+via the `git2` crate) instead of ~2000 lines of bash, and never creates
+temporary branches, worktrees, or clones in your repository: your branches
+and your working tree stay untouched except for the one subdirectory being
+operated on.
+
+## Installation
+
+Build from source (needs a current stable Rust; libgit2 is vendored and
+compiled in, so there is no system dependency beyond OpenSSL on Linux):
+
+```console
+$ cargo install --path .        # from a checkout
+$ cargo install git-include     # once published to crates.io
+```
+
+The binary is named `git-include`, so git automatically picks it up as a
+subcommand: `git include <command>`. Verify with:
+
+```console
+$ git include --version
+```
+
+## Tab completion
+
+Generate a completion script for your shell and source it from your shell
+configuration:
+
+```console
+# bash — completes both `git-include <TAB>` and `git include <TAB>`,
+# including live completion of included directories and branch names
+$ git include completions bash > ~/.local/share/bash-completion/completions/git-include
+
+# zsh — place on your $fpath; zsh's git completion dispatches automatically
+$ git include completions zsh > ~/.zfunc/_git-include
+
+# fish
+$ git include completions fish > ~/.config/fish/completions/git-include.fish
+```
+
+Elvish and PowerShell are also supported (`git include completions --help`).
+
+## Quickstart
+
+### Vendor a repository
+
+```console
+$ git include add https://github.com/example/widgets vendor/widgets
+No branch given; using upstream default branch 'main'.
+Fetching https://github.com/example/widgets (main) ...
+Added 'vendor/widgets' from https://github.com/example/widgets (branch main, commit 1a2b3c4).
+```
+
+This creates **one commit** in your repository containing the full upstream
+tree under `vendor/widgets/` plus `vendor/widgets/.gitrepo`. From here on the
+directory is completely ordinary: edit it, commit to it, revert it, bisect
+through it — it's just files.
+
+### See where you stand
+
+```console
+$ git include status --fetch
+vendor/widgets
+  remote:   https://github.com/example/widgets
+  branch:   main (synced at 1a2b3c4)
+  upstream: 2 new commit(s) available -> `git include pull vendor/widgets`
+  local:    1 commit(s) to push -> `git include push vendor/widgets`
+
+$ git include diff vendor/widgets              # your changes since last sync
+$ git include diff vendor/widgets --upstream --fetch   # vs. latest upstream
+```
+
+Without `--fetch`, `status` uses the upstream state seen by the most recent
+fetch, so it's instant and works offline.
+
+### Pull upstream changes
+
+```console
+$ git include pull vendor/widgets
+```
+
+Your local changes to the directory (if any) are three-way merged with the
+upstream changes, exactly like a `git merge` — including content-level merges
+and conflict markers when both sides touched the same lines. The result is a
+single commit in your repository. `git include pull --all` syncs every
+included directory; with a single include, plain `git include pull` suffices.
+
+### Push your changes upstream
+
+```console
+$ git include push vendor/widgets
+Pushed 2 commit(s) from 'vendor/widgets' to https://github.com/example/widgets (main); upstream is now 9f8e7d6.
+```
+
+Every local commit that touched the directory since the last sync is replayed
+onto the upstream branch as a commit rooted at the subdirectory — original
+message, original author. The `.gitrepo` marker is stripped automatically and
+never appears upstream. Preview with `git include push -n <dir>`.
+
+If upstream moved in the meantime, `push` refuses and asks you to
+`git include pull` first, so upstream never gets surprise merge results.
+
+### Switch the tracked branch
+
+```console
+$ git include branches vendor/widgets
+* main (1a2b3c4)
+  next (5d6e7f8)
+
+$ git include switch vendor/widgets next
+Switched 'vendor/widgets' to branch next (commit 5d6e7f8).
+```
+
+Local changes are carried over (merged) when switching; a clean directory is
+simply swapped to the new branch's content. Switching back is the same
+command again.
+
+## Command reference
+
+| Command | Description |
+| --- | --- |
+| `git include add <remote> <dir> [-b <branch>]` | Vendor an upstream repository into `<dir>`. Uses the remote's default branch unless `-b` is given. |
+| `git include pull [<dir>] [--all]` | Merge new upstream commits into `<dir>` (or all includes). |
+| `git include push <dir> [-n/--dry-run]` | Replay local commits touching `<dir>` onto the upstream branch and push. |
+| `git include status [<dir>] [-f/--fetch]` | Show sync state: commits available upstream, commits to push, uncommitted edits. |
+| `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
+| `git include switch <dir> <branch>` | Track a different upstream branch, carrying local changes over. |
+| `git include branches <dir>` | List upstream branches, marking the tracked one. |
+| `git include list` | List all includes, nested ones indented. |
+| `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
+| `git include completions <shell>` | Print a tab-completion script. |
+
+All `<dir>` arguments are relative to your current directory, so the commands
+work from anywhere inside the repository. `--no-lfs` is accepted by `add`,
+`pull`, `push` and `switch` to skip LFS transfers.
+
+## The `.gitrepo` marker file
+
+Each included directory contains a `.gitrepo` file in git-subrepo's format:
+
+```ini
+; DO NOT EDIT (unless you know what you are doing)
+;
+[subrepo]
+	remote = https://github.com/example/widgets
+	branch = main
+	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
+	parent = 9z8y7x6w...   ; host commit at the time of the last sync
+	method = merge
+	cmdver = 0.1.0
+```
+
+Because the format, keys and semantics match git-subrepo, the two tools are
+interchangeable: git-include operates on directories vendored with
+`git subrepo clone`, and git-subrepo can operate on directories created by
+`git include add`. This also means adopting git-include in an existing
+git-subrepo project requires no migration at all.
+
+## Git LFS
+
+If the upstream repository uses Git LFS, git-include notices (via
+`filter=lfs` in its `.gitattributes`) and handles it automatically:
+
+- **add / pull / switch** fetch the LFS objects from the *upstream* LFS store
+  and materialize real content in your working tree,
+- **push** uploads LFS objects referenced by your commits *before* pushing the
+  git objects, so upstream never sees dangling pointers,
+- if `git-lfs` is not installed, operations still succeed — you get pointer
+  files plus a clear warning with the exact commands to run later,
+- `--no-lfs` skips all of it.
+
+## Nested includes
+
+Included repositories can themselves contain includes. Since everything is
+plain files, the inner `.gitrepo` markers travel along automatically:
+
+```console
+$ git include add https://github.com/example/app libs/app
+$ git include list
+libs/app  <-  https://github.com/example/app (main @ 4ee9c11)
+  libs/app/vendor/parser  <-  https://github.com/example/parser (main @ 77af0d3)
+```
+
+You can operate on any level: `git include pull libs/app` syncs the outer
+repository (bringing whatever state of `vendor/parser` it has committed),
+while `git include pull libs/app/vendor/parser` syncs the inner one directly
+from *its* upstream. When pushing an include, only its own marker is stripped —
+nested markers are content and are pushed intact.
+
+## Handling merge conflicts
+
+When both you and upstream changed the same lines, `pull` stops with the
+conflicting files left in your working tree containing standard conflict
+markers:
+
+```console
+$ git include pull vendor/widgets
+CONFLICT: could not automatically merge upstream changes into 'vendor/widgets'.
+Files with conflict markers:
+  vendor/widgets/src/lib.rs
+
+Resolve the conflicts, then finish with:
+  git add vendor/widgets
+  git commit
+```
+
+There is no special "continue" state to manage: resolve the markers, `git add`,
+`git commit` — done. (The `.gitrepo` update is already staged for you.) If you
+want to bail out instead, `git reset --hard` restores the pre-pull state.
+
+## How it works
+
+Every operation is a pure function of the four marker values (`remote`,
+`branch`, `commit`, `parent`) plus the current state of the host repository
+and the upstream remote — there is no state in `.git/config`, no registered
+remotes, no temporary branches. All of it runs in-process through libgit2
+(the `git2` crate):
+
+- `add` fetches the upstream branch and grafts its tree under the prefix by
+  rewriting the root tree — one commit, no shared history with upstream.
+- `pull` takes three trees — the last-synced upstream commit's tree (base),
+  your current directory tree (ours), and the new upstream head's tree
+  (theirs) — and hands them to libgit2's three-way merge (rename detection
+  included). A clean merge becomes a single host commit; conflicts are
+  materialized in your working tree with standard conflict markers.
+- `push` first verifies the upstream branch still points at the recorded
+  base (so the result is a pure fast-forward upstream, never a surprise
+  merge), then replays each host commit that changed the directory as a new
+  commit on top of the upstream branch — subdirectory tree with the marker
+  stripped, original message and author preserved. Marker-only bookkeeping
+  commits are skipped automatically. Only the include's *own* marker is
+  stripped; nested `.gitrepo` files are content and travel upstream intact.
+- Fetched upstream heads are pinned under `refs/include/<dir>` so `status`
+  and `diff` work offline and fetched objects survive `git gc`.
+
+One subtle case is handled explicitly: a fresh clone of the host repository
+has the vendored *trees and blobs* (they're reachable from host commits)
+but not the upstream *commit* objects. Syncing commands therefore re-fetch
+from the upstream remote on demand, and detect upstream history rewrites
+(force-pushes) with a clear recovery path instead of producing a bogus
+merge.
+
+No temporary branches, no `.git/modules`, no stashing, no touching your
+working tree outside the included directory — and unlike git-subrepo, no
+dependency on `git subtree`-style squash-merge machinery.
+
+## FAQ
+
+**Do my collaborators need git-include?**
+No. The vendored directory is regular files. Only whoever runs
+`pull`/`push`/`switch` needs the tool.
+
+**Does `add` bloat my repository?**
+You get the upstream *tree* (one snapshot), not its history, in your branch.
+The fetched upstream history stays in your local object store for merging but
+is never pushed to your host remote.
+
+**Can I edit vendored files directly?**
+Yes — that's the point. Commit as usual; `git include status` shows what
+hasn't been pushed upstream yet.
+
+**What if upstream force-pushed?**
+`pull` and `push` detect that the recorded commit no longer exists upstream
+and tell you how to recover.
+
+**Which git version do I need?**
+None at runtime — git-include embeds libgit2 and talks to remotes itself.
+The only optional external dependency is `git-lfs` (with git) for LFS
+content, and your credentials are picked up the standard way (ssh-agent and
+git credential helpers).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

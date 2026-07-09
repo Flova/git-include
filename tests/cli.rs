@@ -1,0 +1,808 @@
+//! End-to-end tests: every scenario builds real git repositories in a temp
+//! directory and drives the compiled `git-include` binary, asserting on the
+//! resulting git state (commits, trees, marker files, upstream content).
+
+mod common;
+
+use common::*;
+
+// ---------------------------------------------------------------- add ----
+
+#[test]
+fn add_includes_upstream_files_and_writes_compatible_marker() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "src/lib.rs", "pub fn hello() {}\n", "add lib.rs");
+    let host = env.work_repo("host");
+
+    let out = include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+    assert!(
+        out.contains("Added 'vendor/lib'"),
+        "unexpected output: {out}"
+    );
+
+    // Files are plain files in the host repo.
+    assert_eq!(read(&host, "vendor/lib/src/lib.rs"), "pub fn hello() {}\n");
+    assert_clean(&host);
+
+    // Marker file is git-subrepo compatible: [subrepo] section, tab-indented
+    // keys, correct values.
+    let marker = read(&host, "vendor/lib/.gitrepo");
+    assert!(marker.contains("[subrepo]"), "marker:\n{marker}");
+    assert!(
+        marker.contains(&format!("\tremote = {url}")),
+        "marker:\n{marker}"
+    );
+    assert!(marker.contains("\tbranch = main"), "marker:\n{marker}");
+    let upstream_sha = git_in(&up_work, &["rev-parse", "origin/main"]);
+    assert!(
+        marker.contains(&format!("\tcommit = {upstream_sha}")),
+        "marker:\n{marker}"
+    );
+    assert!(marker.contains("\tparent = "), "marker:\n{marker}");
+    assert!(marker.contains("\tmethod = merge"), "marker:\n{marker}");
+    assert!(marker.contains("\tcmdver = "), "marker:\n{marker}");
+
+    // git-subrepo itself parses the marker with `git config --file`; make
+    // sure that works too.
+    let remote = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(remote, url);
+
+    // Exactly one new commit on the host.
+    let count = git_in(&host, &["rev-list", "--count", "HEAD"]);
+    assert_eq!(count, "2"); // initial + add
+}
+
+#[test]
+fn add_uses_remote_default_branch_when_none_given() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "a.txt", "a\n", "add a");
+    let host = env.work_repo("host");
+
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    let branch = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.branch"],
+    );
+    assert_eq!(branch, "main");
+}
+
+#[test]
+fn add_refuses_dirty_worktree() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    std::fs::write(host.join("README.md"), "dirty\n").unwrap();
+
+    let err = include_err(&host, &["add", &url, "vendor/lib"]);
+    assert!(err.contains("uncommitted changes"), "got: {err}");
+}
+
+#[test]
+fn add_refuses_existing_directory_and_double_add() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    commit_file(&host, "vendor/lib/existing.txt", "x\n", "existing dir");
+
+    let err = include_err(&host, &["add", &url, "vendor/lib"]);
+    assert!(err.contains("already"), "got: {err}");
+}
+
+// --------------------------------------------------------------- pull ----
+
+#[test]
+fn pull_is_noop_when_up_to_date() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    let head = git_in(&host, &["rev-parse", "HEAD"]);
+    let out = include_ok(&host, &["pull", "vendor/lib"]);
+    assert!(out.contains("up to date"), "got: {out}");
+    assert_eq!(
+        git_in(&host, &["rev-parse", "HEAD"]),
+        head,
+        "no commit expected"
+    );
+}
+
+#[test]
+fn pull_brings_in_new_upstream_commits() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    upstream_commit(&up_work, "new.txt", "fresh\n", "upstream adds new.txt");
+    include_ok(&host, &["pull", "vendor/lib"]);
+
+    assert_eq!(read(&host, "vendor/lib/new.txt"), "fresh\n");
+    assert_clean(&host);
+    let sha = git_in(&up_work, &["rev-parse", "origin/main"]);
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.commit"],
+    );
+    assert_eq!(recorded, sha, "marker must track the new upstream commit");
+}
+
+#[test]
+fn pull_merges_upstream_with_local_changes() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Local commit inside the include; upstream commits a different file.
+    commit_file(
+        &host,
+        "vendor/lib/local.txt",
+        "local\n",
+        "host: local addition",
+    );
+    upstream_commit(&up_work, "upstream.txt", "up\n", "upstream addition");
+
+    include_ok(&host, &["pull", "vendor/lib"]);
+    assert_eq!(read(&host, "vendor/lib/local.txt"), "local\n");
+    assert_eq!(read(&host, "vendor/lib/upstream.txt"), "up\n");
+    assert_clean(&host);
+}
+
+#[test]
+fn pull_conflict_leaves_markers_and_resolution_flow_works() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "shared.txt", "original\n", "add shared");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    commit_file(
+        &host,
+        "vendor/lib/shared.txt",
+        "host version\n",
+        "host edit",
+    );
+    upstream_commit(
+        &up_work,
+        "shared.txt",
+        "upstream version\n",
+        "upstream edit",
+    );
+
+    let err = include_err(&host, &["pull", "vendor/lib"]);
+    assert!(err.contains("CONFLICT"), "got: {err}");
+    assert!(err.contains("vendor/lib/shared.txt"), "got: {err}");
+
+    let conflicted = read(&host, "vendor/lib/shared.txt");
+    assert!(
+        conflicted.contains("<<<<<<<"),
+        "expected conflict markers:\n{conflicted}"
+    );
+    assert!(conflicted.contains("host version"), "{conflicted}");
+    assert!(conflicted.contains("upstream version"), "{conflicted}");
+
+    // The marker file was already advanced to the new upstream commit.
+    let sha = git_in(&up_work, &["rev-parse", "origin/main"]);
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.commit"],
+    );
+    assert_eq!(recorded, sha);
+
+    // Resolve exactly as the error message instructs.
+    std::fs::write(host.join("vendor/lib/shared.txt"), "resolved\n").unwrap();
+    git_in(&host, &["add", "vendor/lib"]);
+    git_in(
+        &host,
+        &["commit", "-q", "-m", "merge upstream into vendor/lib"],
+    );
+    assert_clean(&host);
+
+    // And the resolution can be pushed upstream.
+    include_ok(&host, &["push", "vendor/lib"]);
+    let up_clone = env.path("up-check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, up_clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&up_clone, "shared.txt"), "resolved\n");
+}
+
+#[test]
+fn pull_without_argument_targets_single_include_and_all_flag_works() {
+    let env = TestEnv::new();
+    let (url_a, up_a) = env.upstream("liba");
+    let (url_b, up_b) = env.upstream("libb");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url_a, "vendor/a"]);
+
+    upstream_commit(&up_a, "fa.txt", "a\n", "a update");
+    include_ok(&host, &["pull"]); // no argument: only one include
+    assert_eq!(read(&host, "vendor/a/fa.txt"), "a\n");
+
+    include_ok(&host, &["add", &url_b, "vendor/b"]);
+    let err = include_err(&host, &["pull"]); // ambiguous now
+    assert!(err.contains("--all"), "got: {err}");
+
+    upstream_commit(&up_a, "fa2.txt", "a2\n", "a update 2");
+    upstream_commit(&up_b, "fb.txt", "b\n", "b update");
+    include_ok(&host, &["pull", "--all"]);
+    assert_eq!(read(&host, "vendor/a/fa2.txt"), "a2\n");
+    assert_eq!(read(&host, "vendor/b/fb.txt"), "b\n");
+    assert_clean(&host);
+}
+
+// --------------------------------------------------------------- push ----
+
+#[test]
+fn push_replays_local_commits_upstream_without_marker() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    commit_file(&host, "vendor/lib/feature.txt", "v1\n", "add feature file");
+    commit_file(
+        &host,
+        "vendor/lib/feature.txt",
+        "v2\n",
+        "improve feature file",
+    );
+
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 2 commit(s)"), "got: {out}");
+    assert_clean(&host);
+
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "feature.txt"), "v2\n");
+    // Individual commits and messages are preserved...
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert!(log.contains("add feature file"), "log: {log}");
+    assert!(log.contains("improve feature file"), "log: {log}");
+    // ...and the marker file never leaks upstream.
+    assert!(
+        !clone.join(".gitrepo").exists(),
+        ".gitrepo must not be pushed upstream"
+    );
+
+    // The marker now records the new upstream head; a follow-up pull is a
+    // no-op and status is clean.
+    let out = include_ok(&host, &["pull", "vendor/lib"]);
+    assert!(out.contains("up to date"), "got: {out}");
+    let status = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(status.contains("up to date"), "got: {status}");
+    assert!(status.contains("clean"), "got: {status}");
+}
+
+#[test]
+fn push_preserves_commit_authors() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    std::fs::write(host.join("vendor/lib/authored.txt"), "hi\n").unwrap();
+    git_in(&host, &["add", "vendor/lib/authored.txt"]);
+    git_in(
+        &host,
+        &[
+            "-c",
+            "user.name=Alice Author",
+            "-c",
+            "user.email=alice@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "authored change",
+        ],
+    );
+
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    let author = git_in(&clone, &["log", "-1", "--format=%an <%ae>", "main"]);
+    assert_eq!(author, "Alice Author <alice@example.com>");
+}
+
+#[test]
+fn push_with_nothing_to_push_is_a_noop() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    let head = git_in(&host, &["rev-parse", "HEAD"]);
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("no local changes"), "got: {out}");
+    assert_eq!(git_in(&host, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn push_requires_pull_when_upstream_moved() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    commit_file(&host, "vendor/lib/local.txt", "l\n", "local change");
+    upstream_commit(&up_work, "remote.txt", "r\n", "remote change");
+
+    let err = include_err(&host, &["push", "vendor/lib"]);
+    assert!(err.contains("git include pull"), "got: {err}");
+
+    // After pulling, the push goes through.
+    include_ok(&host, &["pull", "vendor/lib"]);
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "local.txt"), "l\n");
+    assert_eq!(read(&clone, "remote.txt"), "r\n");
+}
+
+#[test]
+fn push_dry_run_pushes_nothing() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    commit_file(&host, "vendor/lib/f.txt", "x\n", "change");
+
+    let before = git_in(&up_work, &["ls-remote", "origin", "main"]);
+    let out = include_ok(&host, &["push", "vendor/lib", "--dry-run"]);
+    assert!(out.contains("would push"), "got: {out}");
+    let after = git_in(&up_work, &["ls-remote", "origin", "main"]);
+    assert_eq!(before, after, "dry run must not move upstream");
+}
+
+#[test]
+fn push_refuses_to_delete_upstream() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    git_in(&host, &["rm", "-r", "-q", "vendor/lib"]);
+    git_in(&host, &["commit", "-q", "-m", "drop vendor/lib"]);
+    // Restore it so the marker exists again, with history containing the
+    // deletion in between.
+    git_in(&host, &["revert", "--no-edit", "HEAD"]);
+
+    let err = include_err(&host, &["push", "vendor/lib"]);
+    assert!(err.contains("refusing to push a deletion"), "got: {err}");
+}
+
+// ------------------------------------------------------------- status ----
+
+#[test]
+fn status_reports_behind_ahead_and_dirty() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Freshly added: everything clean.
+    let s = include_ok(&host, &["status"]);
+    assert!(s.contains("vendor/lib"), "got: {s}");
+    assert!(s.contains("upstream: up to date"), "got: {s}");
+    assert!(s.contains("local:    clean"), "got: {s}");
+
+    // Upstream moves: --fetch sees it.
+    upstream_commit(&up_work, "u1.txt", "1\n", "u1");
+    upstream_commit(&up_work, "u2.txt", "2\n", "u2");
+    let s = include_ok(&host, &["status", "vendor/lib", "--fetch"]);
+    assert!(s.contains("2 new commit(s)"), "got: {s}");
+
+    // Local commits to push are counted.
+    commit_file(&host, "vendor/lib/l.txt", "l\n", "local");
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("1 commit(s) to push"), "got: {s}");
+
+    // Uncommitted edits are flagged separately.
+    std::fs::write(host.join("vendor/lib/l.txt"), "edited\n").unwrap();
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("uncommitted changes"), "got: {s}");
+}
+
+// --------------------------------------------------------------- diff ----
+
+#[test]
+fn diff_shows_local_changes_and_upstream_changes() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "code.txt", "line1\n", "base");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // No changes yet.
+    let d = include_ok(&host, &["diff", "vendor/lib"]);
+    assert!(d.contains("no local changes"), "got: {d}");
+
+    // Local edit shows up (paths are subdir-relative, marker excluded).
+    commit_file(&host, "vendor/lib/code.txt", "line1\nline2\n", "local edit");
+    let d = include_ok(&host, &["diff", "vendor/lib"]);
+    assert!(d.contains("+line2"), "got: {d}");
+    assert!(
+        !d.contains(".gitrepo"),
+        "marker must not appear in diffs: {d}"
+    );
+
+    // Upstream comparison after fetch.
+    upstream_commit(&up_work, "up-only.txt", "up\n", "upstream file");
+    let d = include_ok(&host, &["diff", "vendor/lib", "--upstream", "--fetch"]);
+    assert!(d.contains("up-only.txt"), "got: {d}");
+
+    let d = include_ok(&host, &["diff", "vendor/lib", "--stat"]);
+    assert!(d.contains("code.txt"), "got: {d}");
+}
+
+// ----------------------------------------------------- branch switching ----
+
+#[test]
+fn branches_lists_upstream_branches_with_tracked_marker() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    git_in(&up_work, &["checkout", "-q", "-b", "dev"]);
+    upstream_commit(&up_work, "dev.txt", "dev\n", "dev work");
+    git_in(&up_work, &["checkout", "-q", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+
+    let out = include_ok(&host, &["branches", "vendor/lib"]);
+    assert!(out.contains("* main"), "got: {out}");
+    assert!(out.contains("  dev"), "got: {out}");
+}
+
+#[test]
+fn switch_moves_to_another_branch_and_back() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "common.txt", "common\n", "common");
+    git_in(&up_work, &["checkout", "-q", "-b", "dev"]);
+    upstream_commit(&up_work, "dev-only.txt", "dev\n", "dev feature");
+    git_in(&up_work, &["checkout", "-q", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+    assert!(!host.join("vendor/lib/dev-only.txt").exists());
+
+    include_ok(&host, &["switch", "vendor/lib", "dev"]);
+    assert_eq!(read(&host, "vendor/lib/dev-only.txt"), "dev\n");
+    assert_eq!(read(&host, "vendor/lib/common.txt"), "common\n");
+    let branch = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.branch"],
+    );
+    assert_eq!(branch, "dev");
+    assert_clean(&host);
+
+    // Switching back removes branch-only files again.
+    include_ok(&host, &["switch", "vendor/lib", "main"]);
+    assert!(!host.join("vendor/lib/dev-only.txt").exists());
+    assert_eq!(read(&host, "vendor/lib/common.txt"), "common\n");
+    assert_clean(&host);
+}
+
+#[test]
+fn switch_carries_local_changes_over() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    git_in(&up_work, &["checkout", "-q", "-b", "dev"]);
+    upstream_commit(&up_work, "dev.txt", "dev\n", "dev");
+    git_in(&up_work, &["checkout", "-q", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+    commit_file(&host, "vendor/lib/local.txt", "keep me\n", "local work");
+
+    include_ok(&host, &["switch", "vendor/lib", "dev"]);
+    assert_eq!(read(&host, "vendor/lib/local.txt"), "keep me\n");
+    assert_eq!(read(&host, "vendor/lib/dev.txt"), "dev\n");
+    assert_clean(&host);
+}
+
+#[test]
+fn switch_to_same_branch_is_a_noop() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    let out = include_ok(&host, &["switch", "vendor/lib", "main"]);
+    assert!(out.contains("already tracks"), "got: {out}");
+}
+
+// ------------------------------------------------------------ nesting ----
+
+#[test]
+fn nested_includes_survive_all_operations() {
+    let env = TestEnv::new();
+    let (url_b, up_b) = env.upstream("libb");
+    upstream_commit(&up_b, "b.txt", "b1\n", "b content");
+
+    // Repo A itself includes B (nesting level 1).
+    let (url_a, work_a) = env.upstream("liba");
+    include_ok(&work_a, &["add", &url_b, "vendor/b"]);
+    git_in(&work_a, &["push", "-q", "origin", "main"]);
+
+    // Host includes A; B arrives nested inside it.
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url_a, "libs/a"]);
+    assert_eq!(read(&host, "libs/a/vendor/b/b.txt"), "b1\n");
+    assert!(host.join("libs/a/vendor/b/.gitrepo").exists());
+
+    // list shows both, nested one indented under its parent.
+    let out = include_ok(&host, &["list"]);
+    assert!(out.contains("libs/a  <-"), "got: {out}");
+    assert!(out.contains("  libs/a/vendor/b  <-"), "got: {out}");
+
+    // status handles the nested include (whose upstream commit is not in
+    // the host object store) without crashing.
+    let s = include_ok(&host, &["status"]);
+    assert!(s.contains("libs/a/vendor/b"), "got: {s}");
+
+    // B updates; A pulls it and publishes; host pulls A -> nested content
+    // and nested marker update flow through.
+    upstream_commit(&up_b, "b.txt", "b2\n", "b update");
+    include_ok(&work_a, &["pull", "vendor/b"]);
+    git_in(&work_a, &["push", "-q", "origin", "main"]);
+    include_ok(&host, &["pull", "libs/a"]);
+    assert_eq!(read(&host, "libs/a/vendor/b/b.txt"), "b2\n");
+
+    // Host edits inside A (outside B) and pushes to A: A's marker is
+    // stripped but B's nested marker must be preserved upstream.
+    commit_file(
+        &host,
+        "libs/a/host-feature.txt",
+        "hf\n",
+        "host feature for A",
+    );
+    include_ok(&host, &["push", "libs/a"]);
+    let clone = env.path("a-check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url_a, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "host-feature.txt"), "hf\n");
+    assert!(
+        !clone.join(".gitrepo").exists(),
+        "A's own marker must be stripped"
+    );
+    assert!(
+        clone.join("vendor/b/.gitrepo").exists(),
+        "nested marker must survive"
+    );
+
+    // The pushed-to clone of A is itself fully operational: pull B there.
+    configure_user(&clone);
+    let out = include_ok(&clone, &["pull", "vendor/b"]);
+    assert!(out.contains("up to date"), "got: {out}");
+}
+
+// ------------------------------------------------------- collaboration ----
+
+#[test]
+fn fresh_clone_of_host_can_pull_and_push() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let (host_url, host_work) = env.upstream("host");
+    include_ok(&host_work, &["add", &url, "vendor/lib"]);
+    git_in(&host_work, &["push", "-q", "origin", "main"]);
+
+    // A collaborator clones the host repo. The upstream *commit* objects
+    // are not reachable from host history, only the trees/blobs are — the
+    // tool must recover by fetching.
+    let clone = env.path("collab");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &host_url, clone.to_str().unwrap()],
+    );
+    configure_user(&clone);
+    assert_eq!(read(&clone, "vendor/lib/README.md"), "# lib-work\n");
+
+    upstream_commit(&up_work, "from-upstream.txt", "u\n", "upstream work");
+    include_ok(&clone, &["pull", "vendor/lib"]);
+    assert_eq!(read(&clone, "vendor/lib/from-upstream.txt"), "u\n");
+
+    commit_file(&clone, "vendor/lib/from-collab.txt", "c\n", "collab work");
+    include_ok(&clone, &["push", "vendor/lib"]);
+    let check = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, check.to_str().unwrap()],
+    );
+    assert_eq!(read(&check, "from-collab.txt"), "c\n");
+}
+
+// ------------------------------------------------- subrepo compatibility ----
+
+#[test]
+fn operates_on_marker_written_by_git_subrepo() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Rewrite the marker exactly as git-subrepo 0.4.9 would have written
+    // it (its header, its cmdver), simulating a repo previously managed by
+    // git-subrepo.
+    let commit = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.commit"],
+    );
+    let parent = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.parent"],
+    );
+    let subrepo_style = format!(
+        "; DO NOT EDIT (unless you know what you are doing)\n\
+         ;\n\
+         ; This subdirectory is a git \"subrepo\", and this file is maintained by the\n\
+         ; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme\n\
+         ;\n\
+         [subrepo]\n\
+         \tremote = {url}\n\
+         \tbranch = main\n\
+         \tcommit = {commit}\n\
+         \tparent = {parent}\n\
+         \tmethod = merge\n\
+         \tcmdver = 0.4.9\n"
+    );
+    std::fs::write(host.join("vendor/lib/.gitrepo"), subrepo_style).unwrap();
+    git_in(
+        &host,
+        &["commit", "-q", "-am", "convert marker to git-subrepo style"],
+    );
+
+    // status, pull and push all work on the subrepo-written marker.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains(&url), "got: {s}");
+
+    upstream_commit(&up_work, "next.txt", "n\n", "upstream next");
+    include_ok(&host, &["pull", "vendor/lib"]);
+    assert_eq!(read(&host, "vendor/lib/next.txt"), "n\n");
+
+    commit_file(&host, "vendor/lib/ours.txt", "o\n", "our change");
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "ours.txt"), "o\n");
+}
+
+// ------------------------------------------------------------- remove ----
+
+#[test]
+fn remove_deletes_include_and_commits() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    include_ok(&host, &["remove", "vendor/lib"]);
+    assert!(!host.join("vendor/lib").exists());
+    assert_clean(&host);
+    let out = include_ok(&host, &["list"]);
+    assert!(out.contains("No included repositories"), "got: {out}");
+}
+
+// ------------------------------------------------------------ various ----
+
+#[test]
+fn commands_work_from_a_subdirectory_with_relative_paths() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    upstream_commit(&up_work, "x.txt", "x\n", "x");
+    // From inside vendor/, refer to the include as just "lib".
+    include_ok(&host.join("vendor"), &["pull", "lib"]);
+    assert_eq!(read(&host, "vendor/lib/x.txt"), "x\n");
+
+    // And from inside the include itself, as ".".
+    let s = include_ok(&host.join("vendor/lib"), &["status", "."]);
+    assert!(s.contains("vendor/lib"), "got: {s}");
+}
+
+#[test]
+fn pull_refuses_dirty_worktree() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    upstream_commit(&up_work, "y.txt", "y\n", "y");
+
+    std::fs::write(host.join("README.md"), "dirty\n").unwrap();
+    let err = include_err(&host, &["pull", "vendor/lib"]);
+    assert!(err.contains("uncommitted changes"), "got: {err}");
+}
+
+#[test]
+fn errors_are_helpful_for_unknown_directories() {
+    let env = TestEnv::new();
+    let host = env.work_repo("host");
+    let err = include_err(&host, &["pull", "does/not/exist"]);
+    assert!(err.contains("not an included repository"), "got: {err}");
+    assert!(err.contains("git include list"), "got: {err}");
+}
+
+#[test]
+fn completions_cover_direct_and_git_subcommand_usage() {
+    let env = TestEnv::new();
+    let host = env.work_repo("host");
+
+    let bash = include_ok(&host, &["completions", "bash"]);
+    assert!(bash.contains("_git-include"), "clap completion missing");
+    assert!(bash.contains("_git_include"), "git subcommand shim missing");
+    assert!(
+        bash.contains("ls-files -- '*.gitrepo'"),
+        "dynamic dir completion missing"
+    );
+
+    let zsh = include_ok(&host, &["completions", "zsh"]);
+    assert!(zsh.contains("#compdef git-include"), "zsh compdef missing");
+
+    let fish = include_ok(&host, &["completions", "fish"]);
+    assert!(
+        fish.contains("__fish_git_include_dirs"),
+        "fish shim missing"
+    );
+}
+
+// ---------------------------------------------------------------- LFS ----
+
+/// Full LFS round-trip. Skipped (with a note) when git-lfs is not
+/// installed on the machine running the tests.
+#[test]
+fn lfs_content_is_fetched_on_add_and_pull() {
+    if !lfs_available() {
+        eprintln!("SKIP: git-lfs is not installed");
+        return;
+    }
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+
+    git_in(&up_work, &["lfs", "install", "--local"]);
+    git_in(&up_work, &["lfs", "track", "*.bin"]);
+    std::fs::write(up_work.join("big.bin"), vec![7u8; 4096]).unwrap();
+    git_in(&up_work, &["add", ".gitattributes", "big.bin"]);
+    git_in(&up_work, &["commit", "-q", "-m", "add LFS file"]);
+    git_in(&up_work, &["push", "-q", "origin", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    let content = std::fs::read(host.join("vendor/lib/big.bin")).unwrap();
+    assert_eq!(
+        content.len(),
+        4096,
+        "expected real LFS content, not a pointer file"
+    );
+    assert_eq!(content[0], 7u8);
+}
+
+fn lfs_available() -> bool {
+    std::process::Command::new("git")
+        .args(["lfs", "version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
