@@ -67,11 +67,16 @@ pub fn sync(inc: Include<'_>, new_branch: Option<&str>, action: &str, no_lfs: bo
             (merged, conflicts)
         };
 
-    // Attach the updated marker file to the merged tree.
+    // Attach the updated marker file to the merged tree. Note that
+    // `parent` is deliberately NOT advanced by a pull: it marks the last
+    // host commit whose changes are already upstream, so local commits
+    // made before this pull can still be pushed individually later.
     let mut meta = inc.meta.clone();
     meta.branch = branch.clone();
     meta.commit = upstream.clone();
-    meta.parent = Some(git.head()?);
+    if meta.parent.is_none() {
+        meta.parent = Some(git.head()?);
+    }
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
     let subtree = git.tree_with_blob(&merged_stripped, MARKER_FILE, meta.serialize().as_bytes())?;
 

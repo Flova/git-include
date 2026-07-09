@@ -11,10 +11,15 @@ small marker file. That's the whole model:
   `--recursive`, no `submodule update`, no git-include installation required.
   Only the person syncing with upstream needs the tool.
 - **Two-way sync.** `git include pull` merges new upstream work into your tree;
-  `git include push` sends your local commits back upstream — with their
-  original messages and authors, and without ever leaking the marker file.
+  `git include push` rebuilds upstream history from your commits — each host
+  commit that touched the directory becomes an individual upstream commit
+  with its original message and author (even commits made before a pull),
+  and the marker file never leaks upstream.
 - **git-subrepo compatible.** The marker file is the same `.gitrepo` format.
   You can adopt a repository that already uses git-subrepo, or hand one back.
+- **Export built in.** `git include init` turns any ordinary directory into
+  a new included repository, extracting its full history from your commits —
+  ready to push to its own (even empty) repository.
 - **First-class Git LFS support**, painless **branch switching**, quick
   **status/diff against upstream**, **nested includes**, and **tab completion**
   out of the box.
@@ -37,6 +42,7 @@ $ git include push vendor/widgets      # contribute your changes back
 - [Command reference](#command-reference)
 - [The `.gitrepo` marker file](#the-gitrepo-marker-file)
 - [Git LFS](#git-lfs)
+- [Exporting a directory into its own repository](#exporting-a-directory-into-its-own-repository)
 - [Nested includes](#nested-includes)
 - [Handling merge conflicts](#handling-merge-conflicts)
 - [How it works](#how-it-works)
@@ -159,10 +165,21 @@ $ git include push vendor/widgets
 Pushed 2 commit(s) from 'vendor/widgets' to https://github.com/example/widgets (main); upstream is now 9f8e7d6.
 ```
 
-Every local commit that touched the directory since the last sync is replayed
-onto the upstream branch as a commit rooted at the subdirectory — original
-message, original author. The `.gitrepo` marker is stripped automatically and
-never appears upstream. Preview with `git include push -n <dir>`.
+`push` builds a new upstream history: every host commit that changed the
+directory since your changes were last incorporated upstream is
+cherry-picked onto the upstream branch as its own commit — original message,
+original author, but containing only the changes relevant to the directory.
+This works **across pulls**: commits you made before pulling upstream
+changes still arrive upstream individually (the pull itself contributes
+nothing, since its content is already there). The commit hashes necessarily
+differ from your host commits, but the content is preserved exactly. The
+`.gitrepo` marker is stripped automatically and never appears upstream.
+
+Preview with `git include push -n <dir>`; use `--squash` if you'd rather
+publish everything as a single commit. If a commit cannot be cherry-picked
+cleanly on its own (e.g. its conflict resolution only exists in a later
+merge), push keeps the commits it could replay and combines the remainder
+into one final commit, so the pushed content always matches your tree.
 
 If upstream moved in the meantime, `push` refuses and asks you to
 `git include pull` first, so upstream never gets surprise merge results.
@@ -212,7 +229,7 @@ Each included directory contains a `.gitrepo` file in git-subrepo's format:
 	remote = https://github.com/example/widgets
 	branch = main
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
-	parent = 9z8y7x6w...   ; host commit at the time of the last sync
+	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
 	cmdver = 0.1.0
 ```
@@ -235,6 +252,29 @@ If the upstream repository uses Git LFS, git-include notices (via
 - if `git-lfs` is not installed, operations still succeed — you get pointer
   files plus a clear warning with the exact commands to run later,
 - `--no-lfs` skips all of it.
+
+## Exporting a directory into its own repository
+
+The reverse of `add`: a directory that grew inside your repository can
+graduate into a repository of its own, history included.
+
+```console
+$ git include init mylib --remote git@github.com:me/mylib.git
+Extracting the history of 'mylib' ...
+Turned 'mylib' into an included repository: extracted 17 commit(s) of history (head 3fc9a21).
+Publish it with: git include push mylib
+
+$ git include push mylib
+Published 'mylib' to git@github.com:me/mylib.git as new branch 'main'.
+```
+
+`init` (alias: `export`) walks your entire history, and every commit that
+changed the directory becomes a commit of a brand-new standalone history —
+original author and message, content filtered to the directory (a commit
+that touched both `mylib/` and other files contributes only its `mylib/`
+part). `push` then publishes that history, creating the branch on an empty
+remote if needed. From that moment the directory is a normal include:
+others can `git include add` it, and `pull`/`push`/`status` work as usual.
 
 ## Nested includes
 

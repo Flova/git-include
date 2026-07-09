@@ -54,9 +54,26 @@ pub enum Command {
         /// Show what would be pushed without pushing
         #[arg(short = 'n', long)]
         dry_run: bool,
+        /// Push all local changes as a single squashed commit
+        #[arg(long)]
+        squash: bool,
         /// Skip Git LFS object upload
         #[arg(long)]
         no_lfs: bool,
+    },
+    /// Turn an existing directory into a new included repository,
+    /// extracting its full history from your commits
+    #[command(alias = "export")]
+    Init {
+        /// Tracked directory to turn into an included repository
+        subdir: PathBuf,
+        /// URL of the (possibly still empty) repository that will host it
+        #[arg(short, long)]
+        remote: String,
+        /// Branch to publish to (default: the remote's default branch,
+        /// or 'main' for an empty remote)
+        #[arg(short, long)]
+        branch: Option<String>,
     },
     /// Show sync state of included repositories (local + upstream)
     Status {

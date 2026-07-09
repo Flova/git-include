@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::git::Git;
-use crate::gitrepo::MARKER_FILE;
+use crate::ops::push::plan_replay;
 use crate::ops::{Include, find_all_includes};
 use crate::util::short;
 
@@ -80,8 +80,8 @@ fn print_one(git: &Git, subdir: &str, fetch: bool) -> Result<()> {
     Ok(())
 }
 
-/// Number of local commits whose content would be replayed by `push`
-/// (mirrors push's skip rules, so the count matches what push will do).
+/// Number of commits `push` would create (it runs the exact same replay
+/// planning as push, so the count matches what push will do).
 pub fn count_unpushed(inc: &Include<'_>) -> Result<usize> {
     let git = inc.git;
     let Some(parent) = inc.meta.parent.as_deref() else {
@@ -90,19 +90,7 @@ pub fn count_unpushed(inc: &Include<'_>) -> Result<usize> {
     if !git.has_commit(&inc.meta.commit) || !git.has_commit(parent) {
         return Ok(0);
     }
-    let mut tip_tree = git
-        .rev_parse(&format!("{}^{{tree}}", inc.meta.commit))
-        .unwrap_or_default();
-    let mut count = 0usize;
-    for commit in git.walk_range(parent, &git.head()?)? {
-        let Some(tree) = git.tree_at(&commit, &inc.subdir) else {
-            continue;
-        };
-        let stripped = git.tree_without_entry(&tree, MARKER_FILE)?;
-        if stripped != tip_tree {
-            count += 1;
-            tip_tree = stripped;
-        }
-    }
-    Ok(count)
+    let plan = plan_replay(inc, &inc.meta.commit)?;
+    // A conflicting remainder is pushed as one combined commit.
+    Ok(plan.steps.len() + usize::from(plan.conflict.is_some()))
 }

@@ -343,7 +343,8 @@ fn push_requires_pull_when_upstream_moved() {
     let err = include_err(&host, &["push", "vendor/lib"]);
     assert!(err.contains("git include pull"), "got: {err}");
 
-    // After pulling, the push goes through.
+    // After pulling, the push goes through — and the local commit arrives
+    // upstream as its own commit, not folded into the pull.
     include_ok(&host, &["pull", "vendor/lib"]);
     include_ok(&host, &["push", "vendor/lib"]);
     let clone = env.path("check");
@@ -353,6 +354,74 @@ fn push_requires_pull_when_upstream_moved() {
     );
     assert_eq!(read(&clone, "local.txt"), "l\n");
     assert_eq!(read(&clone, "remote.txt"), "r\n");
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert!(log.contains("local change"), "log: {log}");
+    assert!(!log.contains("git include pull"), "log: {log}");
+}
+
+#[test]
+fn push_preserves_individual_commits_across_pulls() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Two local commits, then upstream moves, then a pull — the classic
+    // situation where naive tools squash everything into the pull commit.
+    commit_file(&host, "vendor/lib/one.txt", "1\n", "first local commit");
+    commit_file(&host, "vendor/lib/two.txt", "2\n", "second local commit");
+    upstream_commit(&up_work, "upstream.txt", "u\n", "upstream work");
+    include_ok(&host, &["pull", "vendor/lib"]);
+
+    // status counts the pre-pull commits as still unpushed.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("2 commit(s) to push"), "got: {s}");
+
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "one.txt"), "1\n");
+    assert_eq!(read(&clone, "two.txt"), "2\n");
+    assert_eq!(read(&clone, "upstream.txt"), "u\n");
+    // Both local commits exist individually upstream (new hashes, same
+    // messages); the pull left no trace in upstream history.
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert!(log.contains("first local commit"), "log: {log}");
+    assert!(log.contains("second local commit"), "log: {log}");
+    assert!(!log.contains("git include"), "log: {log}");
+    // And afterwards everything is in sync.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("up to date"), "got: {s}");
+    assert!(s.contains("clean"), "got: {s}");
+}
+
+#[test]
+fn push_squash_flattens_local_commits() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    commit_file(&host, "vendor/lib/a.txt", "a\n", "step one");
+    commit_file(&host, "vendor/lib/b.txt", "b\n", "step two");
+
+    let out = include_ok(&host, &["push", "vendor/lib", "--squash"]);
+    assert!(out.contains("Pushed 1 commit(s)"), "got: {out}");
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "a.txt"), "a\n");
+    assert_eq!(read(&clone, "b.txt"), "b\n");
+    // One squashed commit on top of the initial upstream commit.
+    assert_eq!(git_in(&clone, &["rev-list", "--count", "main"]), "2");
+    let body = git_in(&clone, &["log", "-1", "--format=%B", "main"]);
+    assert!(body.contains("step one"), "body: {body}");
+    assert!(body.contains("step two"), "body: {body}");
 }
 
 #[test]
@@ -685,6 +754,82 @@ fn operates_on_marker_written_by_git_subrepo() {
         &["clone", "-q", &url, clone.to_str().unwrap()],
     );
     assert_eq!(read(&clone, "ours.txt"), "o\n");
+}
+
+// ------------------------------------------------------- init / export ----
+
+#[test]
+fn init_extracts_directory_history_and_publishes_it() {
+    let env = TestEnv::new();
+    let host = env.work_repo("host");
+
+    // Grow a normal directory over several commits, including one mixed
+    // commit that also touches files outside the directory.
+    commit_file(&host, "mylib/core.txt", "v1\n", "mylib: create core");
+    commit_file(&host, "unrelated.txt", "x\n", "unrelated work");
+    std::fs::write(host.join("mylib/core.txt"), "v2\n").unwrap();
+    std::fs::write(host.join("other.txt"), "o\n").unwrap();
+    git_in(&host, &["add", "."]);
+    git_in(
+        &host,
+        &["commit", "-q", "-m", "mixed: improve core and other"],
+    );
+    commit_file(&host, "mylib/extra.txt", "e\n", "mylib: add extra");
+
+    // Export it to a brand-new (empty) repository.
+    let bare = env.bare_repo("exported.git");
+    let url = bare.to_str().unwrap().to_string();
+    let out = include_ok(&host, &["init", "mylib", "--remote", &url]);
+    assert!(out.contains("extracted 3 commit(s)"), "got: {out}");
+    assert!(read(&host, "mylib/.gitrepo").contains(&url));
+    assert_clean(&host);
+
+    include_ok(&host, &["push", "mylib"]);
+
+    // The published repository contains exactly the directory's history:
+    // its files, its commits (original messages), nothing else.
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "core.txt"), "v2\n");
+    assert_eq!(read(&clone, "extra.txt"), "e\n");
+    assert!(!clone.join("unrelated.txt").exists());
+    assert!(!clone.join("other.txt").exists());
+    assert!(!clone.join(".gitrepo").exists());
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert_eq!(
+        log,
+        "mylib: add extra\nmixed: improve core and other\nmylib: create core"
+    );
+
+    // From here on it behaves like any other include.
+    let s = include_ok(&host, &["status", "mylib"]);
+    assert!(s.contains("up to date"), "got: {s}");
+    assert!(s.contains("clean"), "got: {s}");
+    commit_file(&host, "mylib/core.txt", "v3\n", "mylib: v3");
+    include_ok(&host, &["push", "mylib"]);
+    git_in(&clone, &["pull", "-q", "origin", "main"]);
+    assert_eq!(read(&clone, "core.txt"), "v3\n");
+    let out = include_ok(&host, &["pull", "mylib"]);
+    assert!(out.contains("up to date"), "got: {out}");
+}
+
+#[test]
+fn init_refuses_untracked_or_already_included_directories() {
+    let env = TestEnv::new();
+    let host = env.work_repo("host");
+    let bare = env.bare_repo("x.git");
+    let url = bare.to_str().unwrap().to_string();
+
+    let err = include_err(&host, &["init", "nonexistent", "--remote", &url]);
+    assert!(err.contains("no tracked files"), "got: {err}");
+
+    let (lib_url, _up) = env.upstream("lib");
+    include_ok(&host, &["add", &lib_url, "vendor/lib"]);
+    let err = include_err(&host, &["init", "vendor/lib", "--remote", &url]);
+    assert!(err.contains("already an included repository"), "got: {err}");
 }
 
 // ------------------------------------------------------------- remove ----

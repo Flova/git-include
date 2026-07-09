@@ -57,10 +57,19 @@ fn run(cli: Cli) -> Result<()> {
         Command::Push {
             subdir,
             dry_run,
+            squash,
             no_lfs,
         } => {
             let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::push::run(&git, &subdir, dry_run, no_lfs)
+            ops::push::run(&git, &subdir, dry_run, squash, no_lfs)
+        }
+        Command::Init {
+            subdir,
+            remote,
+            branch,
+        } => {
+            let subdir = repo_relative_subdir(&git, &subdir)?;
+            ops::init::run(&git, &subdir, &remote, branch.as_deref())
         }
         Command::Status { subdir, fetch } => {
             let subdir = subdir.map(|s| repo_relative_subdir(&git, &s)).transpose()?;

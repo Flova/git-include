@@ -1,6 +1,7 @@
 pub mod add;
 pub mod branches;
 pub mod diff;
+pub mod init;
 pub mod list;
 pub mod pull;
 pub mod push;

@@ -97,6 +97,18 @@ impl Git {
         Ok(out)
     }
 
+    /// All commits reachable from `to`, oldest first.
+    pub fn walk_all(&self, to: &str) -> Result<Vec<String>> {
+        let mut walk = self.repo.revwalk()?;
+        walk.push(Oid::from_str(to)?)?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::REVERSE)?;
+        let mut out = Vec::new();
+        for oid in walk {
+            out.push(oid?.to_string());
+        }
+        Ok(out)
+    }
+
     // ------------------------------------------------------------ status --
 
     /// Require no staged or unstaged changes to tracked files (untracked
@@ -202,8 +214,11 @@ impl Git {
 
     /// Fetch `branch` from `remote` and return the fetched commit id.
     /// The commit is pinned under `pin_ref` so it survives `git gc` and is
-    /// reusable for offline status/diff.
+    /// reusable for offline status/diff. Fails if the remote does not have
+    /// the branch (libgit2 treats an unmatched refspec as a successful
+    /// no-op fetch, so the pin ref is cleared first to detect that).
     pub fn fetch_branch(&self, remote: &str, branch: &str, pin_ref: &str) -> Result<String> {
+        self.delete_ref(pin_ref);
         let mut r = self.open_remote(remote)?;
         let refspec = format!("+refs/heads/{branch}:{pin_ref}");
         r.fetch(&[&refspec], Some(&mut self.fetch_options()), None)
@@ -211,7 +226,7 @@ impl Git {
         Ok(self
             .repo
             .refname_to_id(pin_ref)
-            .context("fetch succeeded but the fetched ref does not resolve")?
+            .with_context(|| format!("branch '{branch}' does not exist on {remote}"))?
             .to_string())
     }
 
@@ -369,9 +384,15 @@ impl Git {
         Ok(oid.to_string())
     }
 
-    /// Create a commit object with `tree`, one parent, and the author of
-    /// `original_commit` (committer is the configured user). No ref moves.
-    pub fn replay_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String> {
+    /// Create a commit object with `tree`, an optional parent (None makes a
+    /// root commit), and the author + message of `original` (committer is
+    /// the configured user). No ref moves.
+    pub fn replay_commit(
+        &self,
+        original: &str,
+        tree: &str,
+        parent: Option<&str>,
+    ) -> Result<String> {
         let orig = self.repo.find_commit(Oid::from_str(original)?)?;
         let author = orig.author().to_owned();
         let committer = self
@@ -379,12 +400,35 @@ impl Git {
             .signature()
             .context("cannot determine committer; set user.name and user.email in git config")?;
         let tree = self.repo.find_tree(Oid::from_str(tree)?)?;
-        let parent = self.repo.find_commit(Oid::from_str(parent)?)?;
+        let parent = parent
+            .map(|p| self.repo.find_commit(Oid::from_str(p)?))
+            .transpose()?;
+        let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
         let message = String::from_utf8_lossy(orig.message_bytes()).into_owned();
         let oid = self
             .repo
-            .commit(None, &author, &committer, &message, &tree, &[&parent])?;
+            .commit(None, &author, &committer, &message, &tree, &parents)?;
         Ok(oid.to_string())
+    }
+
+    /// Create a commit object with `tree` and the configured user as both
+    /// author and committer. No ref moves.
+    pub fn new_commit(&self, tree: &str, parent: &str, message: &str) -> Result<String> {
+        let sig = self
+            .repo
+            .signature()
+            .context("cannot determine committer; set user.name and user.email in git config")?;
+        let tree = self.repo.find_tree(Oid::from_str(tree)?)?;
+        let parent = self.repo.find_commit(Oid::from_str(parent)?)?;
+        let oid = self
+            .repo
+            .commit(None, &sig, &sig, message, &tree, &[&parent])?;
+        Ok(oid.to_string())
+    }
+
+    /// The id of the empty tree.
+    pub fn empty_tree(&self) -> Result<String> {
+        Ok(self.repo.treebuilder(None)?.write()?.to_string())
     }
 
     pub fn commit_summary(&self, oid: &str) -> String {

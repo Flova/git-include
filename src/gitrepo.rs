@@ -21,8 +21,10 @@ pub struct GitRepoFile {
     pub branch: String,
     /// Upstream commit the subdirectory was last synced to.
     pub commit: String,
-    /// Commit in the *host* repository that was HEAD when the last
-    /// git-include/git-subrepo commit for this directory was made.
+    /// The last host commit whose subdirectory changes are already part
+    /// of upstream (set by add/init/push). Push replays every host commit
+    /// after this one; pulls intentionally do not advance it, so local
+    /// commits made before a pull are still pushed individually.
     pub parent: Option<String>,
     /// Sync method (git-subrepo supports "merge" and "rebase"; git-include
     /// always uses "merge" semantics but preserves the field when reading).
