@@ -96,14 +96,21 @@ with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 $ git include self-update            # or --version vX.Y.Z, or -n to preview
 ```
 
+(Self-update is only compiled into the binaries git-include distributes
+itself — the curl-installed ones and the Windows MSI. Package-manager
+builds like conda disable it via a cargo feature flag.)
+
 **Windows:** download the MSI installer from the
 [latest release](https://github.com/flova/git-include/releases/latest) —
 it installs `git-include.exe` and puts it on `PATH`. (`self-update` works
 on Windows too.)
 
-**Conda:** every release ships a `.conda` package (see the release assets;
-installable into a channel of your choice — the recipe lives in
-`conda/recipe.yaml`).
+**Conda:** every release ships `.conda` packages for linux-64,
+linux-aarch64, osx-64, osx-arm64 and win-64 (see the release assets; the
+recipe lives in `conda/recipe.yaml`). Conda builds are compiled without
+the self-update mechanism — there, updating is conda's job
+(`conda update git-include`), and `git include self-update` says so
+instead of fighting the package manager.
 
 **From source** (needs a current stable Rust; libgit2 is vendored and
 compiled in, so there is no system dependency beyond OpenSSL on Linux):

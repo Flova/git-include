@@ -61,18 +61,27 @@ jobs:
           if-no-files-found: error
 
   conda:
-    name: Conda package
-    runs-on: ubuntu-latest
+    name: Conda package (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-64,      os: ubuntu-latest }
+          - { platform: linux-aarch64, os: ubuntu-24.04-arm }
+          - { platform: osx-64,        os: macos-13 }
+          - { platform: osx-arm64,     os: macos-latest }
+          - { platform: win-64,        os: windows-latest }
     steps:
       - uses: actions/checkout@v4
       - uses: prefix-dev/rattler-build-action@v0.2.34
         with:
           recipe-path: conda/recipe.yaml
           upload-artifact: false
-          build-args: --output-dir dist
+          build-args: --output-dir dist --target-platform ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
-          name: conda
+          name: conda-${{ matrix.platform }}
           path: dist/**/*.conda
           if-no-files-found: error
 

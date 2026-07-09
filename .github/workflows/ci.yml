@@ -30,6 +30,8 @@ jobs:
           git lfs version
       - run: cargo test --all-targets
       - run: cargo build --release
+      - name: Check the package-manager build (self-update disabled)
+        run: cargo check --no-default-features
 
   lint:
     name: Lint

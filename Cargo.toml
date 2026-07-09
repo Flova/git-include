@@ -14,6 +14,13 @@ categories = ["command-line-utilities", "development-tools"]
 name = "git-include"
 path = "src/main.rs"
 
+[features]
+default = ["self-update"]
+# Compiles the `git include self-update` command. Package-manager builds
+# (conda, distro packages) disable this: there, updating is the package
+# manager's job, and a self-replacing binary would fight it.
+self-update = []
+
 [dependencies]
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive", "wrap_help"] }
