@@ -30,8 +30,18 @@ pub enum Command {
         /// Directory to place the included repository in
         subdir: PathBuf,
         /// Upstream branch to track (default: the remote's default branch)
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with_all = ["tag", "commit"])]
         branch: Option<String>,
+        /// Pin to an upstream tag instead of tracking a branch
+        #[arg(short, long, conflicts_with = "commit")]
+        tag: Option<String>,
+        /// Pin to an exact upstream commit id
+        #[arg(long)]
+        commit: Option<String>,
+        /// Commit message template for the sync commit ({{ variable }}
+        /// substitution; see the README for available variables)
+        #[arg(short, long)]
+        message: Option<String>,
         /// Skip Git LFS object download even if upstream uses LFS
         #[arg(long)]
         no_lfs: bool,
@@ -43,6 +53,12 @@ pub enum Command {
         /// Pull every included repository
         #[arg(long, conflicts_with = "subdir")]
         all: bool,
+        /// Discard local changes to the directory and take upstream verbatim
+        #[arg(long)]
+        force: bool,
+        /// Commit message template for the sync commit
+        #[arg(short, long)]
+        message: Option<String>,
         /// Skip Git LFS object download
         #[arg(long)]
         no_lfs: bool,
@@ -57,6 +73,9 @@ pub enum Command {
         /// Push all local changes as a single squashed commit
         #[arg(long)]
         squash: bool,
+        /// Commit message template for the local bookkeeping commit
+        #[arg(short, long)]
+        message: Option<String>,
         /// Skip Git LFS object upload
         #[arg(long)]
         no_lfs: bool,
@@ -74,6 +93,9 @@ pub enum Command {
         /// or 'main' for an empty remote)
         #[arg(short, long)]
         branch: Option<String>,
+        /// Commit message template for the sync commit
+        #[arg(short, long)]
+        message: Option<String>,
     },
     /// Show sync state of included repositories (local + upstream)
     Status {
@@ -98,17 +120,23 @@ pub enum Command {
         #[arg(long)]
         stat: bool,
     },
-    /// Switch an included directory to another upstream branch
+    /// Switch an included directory to another branch, tag, or commit
     Switch {
         /// Included directory
         subdir: PathBuf,
-        /// Upstream branch to switch to
-        branch: String,
+        /// Branch to track, or tag/commit to pin to
+        rev: String,
+        /// Discard local changes instead of carrying them over
+        #[arg(long)]
+        force: bool,
+        /// Commit message template for the sync commit
+        #[arg(short, long)]
+        message: Option<String>,
         /// Skip Git LFS object download
         #[arg(long)]
         no_lfs: bool,
     },
-    /// List the upstream branches of an included repository
+    /// List the upstream branches and tags of an included repository
     Branches {
         /// Included directory
         subdir: PathBuf,
@@ -119,12 +147,24 @@ pub enum Command {
     Remove {
         /// Included directory
         subdir: PathBuf,
+        /// Commit message template for the removal commit
+        #[arg(short, long)]
+        message: Option<String>,
     },
     /// Generate shell tab-completion scripts
     Completions {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: CompletionShell,
+    },
+    /// Update git-include itself to the latest release
+    SelfUpdate {
+        /// Install a specific version instead of the latest (e.g. v0.2.0)
+        #[arg(long)]
+        version: Option<String>,
+        /// Only check what would be installed
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 }
 

@@ -869,6 +869,188 @@ fn marker_without_parent_entry_still_pulls_and_pushes() {
     assert_eq!(read(&clone, "mine.txt"), "m\n");
 }
 
+// ------------------------------------------------- tag / commit pinning ----
+
+#[test]
+fn add_pinned_to_tag_or_commit_and_push_is_refused() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "f.txt", "v1\n", "version 1");
+    git_in(&up_work, &["tag", "-a", "v1.0", "-m", "release v1.0"]);
+    git_in(&up_work, &["push", "-q", "origin", "v1.0"]);
+    let pinned_sha = git_in(&up_work, &["rev-parse", "HEAD"]);
+    upstream_commit(&up_work, "f.txt", "v2\n", "version 2 (after the tag)");
+
+    let host = env.work_repo("host");
+
+    // Pin to the annotated tag: content is the tagged state, not the head.
+    let out = include_ok(&host, &["add", &url, "vendor/tagged", "--tag", "v1.0"]);
+    assert!(out.contains("pinned to tag 'v1.0'"), "got: {out}");
+    assert_eq!(read(&host, "vendor/tagged/f.txt"), "v1\n");
+    let marker = read(&host, "vendor/tagged/.gitrepo");
+    assert!(marker.contains("branch = v1.0"), "marker:\n{marker}");
+    assert!(
+        marker.contains(&format!("commit = {pinned_sha}")),
+        "marker:\n{marker}"
+    );
+
+    // Pin to an exact commit id.
+    include_ok(
+        &host,
+        &["add", &url, "vendor/exact", "--commit", &pinned_sha],
+    );
+    assert_eq!(read(&host, "vendor/exact/f.txt"), "v1\n");
+
+    // Pulls on pinned includes are stable no-op reports.
+    let out = include_ok(&host, &["pull", "vendor/tagged"]);
+    assert!(out.contains("pinned to tag 'v1.0'"), "got: {out}");
+    let out = include_ok(&host, &["pull", "vendor/exact"]);
+    assert!(out.contains("pinned to commit"), "got: {out}");
+
+    // Pushing to a tag or commit is impossible and says so.
+    commit_file(&host, "vendor/tagged/l.txt", "l\n", "local");
+    let err = include_err(&host, &["push", "vendor/tagged"]);
+    assert!(err.contains("pinned to tag 'v1.0'"), "got: {err}");
+    assert!(err.contains("git include switch"), "got: {err}");
+    commit_file(&host, "vendor/exact/l.txt", "l\n", "local");
+    let err = include_err(&host, &["push", "vendor/exact"]);
+    assert!(err.contains("pinned to commit"), "got: {err}");
+}
+
+#[test]
+fn switch_pins_to_tag_and_back_to_branch() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "f.txt", "v1\n", "version 1");
+    git_in(&up_work, &["tag", "v1.0"]);
+    git_in(&up_work, &["push", "-q", "origin", "v1.0"]);
+    upstream_commit(&up_work, "f.txt", "v2\n", "version 2");
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]); // tracks main at v2
+    assert_eq!(read(&host, "vendor/lib/f.txt"), "v2\n");
+
+    // Pin to the tag: content rolls back to the tagged state.
+    let out = include_ok(&host, &["switch", "vendor/lib", "v1.0"]);
+    assert!(
+        out.contains("Pinned 'vendor/lib' to tag 'v1.0'"),
+        "got: {out}"
+    );
+    assert_eq!(read(&host, "vendor/lib/f.txt"), "v1\n");
+    assert_clean(&host);
+
+    // `branches` lists the tag and marks it as tracked.
+    let out = include_ok(&host, &["branches", "vendor/lib"]);
+    assert!(out.contains("* v1.0"), "got: {out}");
+    assert!(out.contains("  main"), "got: {out}");
+
+    // Unpin by switching back to the branch; content moves to the head
+    // again and pushing works once more.
+    include_ok(&host, &["switch", "vendor/lib", "main"]);
+    assert_eq!(read(&host, "vendor/lib/f.txt"), "v2\n");
+    commit_file(&host, "vendor/lib/l.txt", "l\n", "after unpin");
+    include_ok(&host, &["push", "vendor/lib"]);
+}
+
+// --------------------------------------------------------- force pull ----
+
+#[test]
+fn pull_force_discards_local_state() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "f.txt", "upstream\n", "base");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Local committed change + uncommitted edit + upstream progress.
+    commit_file(&host, "vendor/lib/f.txt", "local mess\n", "local mess");
+    std::fs::write(host.join("vendor/lib/f.txt"), "even worse\n").unwrap();
+    upstream_commit(&up_work, "f.txt", "upstream v2\n", "upstream v2");
+
+    include_ok(&host, &["pull", "vendor/lib", "--force"]);
+    assert_eq!(read(&host, "vendor/lib/f.txt"), "upstream v2\n");
+    assert_clean(&host);
+
+    // The discarded local commit is NOT pushed later: force advanced the
+    // sync point.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("clean"), "got: {s}");
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("no local changes"), "got: {out}");
+}
+
+#[test]
+fn pull_force_resolves_a_conflicted_pull() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "s.txt", "orig\n", "base");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    commit_file(&host, "vendor/lib/s.txt", "mine\n", "mine");
+    upstream_commit(&up_work, "s.txt", "theirs\n", "theirs");
+
+    // Normal pull conflicts and suggests --force as the bail-out.
+    let err = include_err(&host, &["pull", "vendor/lib"]);
+    assert!(err.contains("--force"), "got: {err}");
+    // Take upstream and move on.
+    include_ok(&host, &["pull", "vendor/lib", "--force"]);
+    assert_eq!(read(&host, "vendor/lib/s.txt"), "theirs\n");
+    assert_clean(&host);
+}
+
+// --------------------------------------------------- message templates ----
+
+#[test]
+fn commit_messages_are_templatable_via_flag_and_config() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+
+    // --message on the command line.
+    include_ok(
+        &host,
+        &[
+            "add",
+            &url,
+            "vendor/lib",
+            "--message",
+            "vendor: import {{ subdir }} at {{ short_commit }}",
+        ],
+    );
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    let sha = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.commit"],
+    );
+    assert_eq!(
+        subject,
+        format!("vendor: import vendor/lib at {}", &sha[..7])
+    );
+
+    // include.commitTemplate in git config, with \n escapes for the body.
+    git_in(
+        &host,
+        &[
+            "config",
+            "include.commitTemplate",
+            "chore({{ subdir }}): {{ action }} from {{ ref }}\\n\\nupstream: {{ remote }}",
+        ],
+    );
+    upstream_commit(&up_work, "n.txt", "n\n", "upstream work");
+    include_ok(&host, &["pull", "vendor/lib"]);
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "chore(vendor/lib): pull from main");
+    let body = git_in(&host, &["log", "-1", "--format=%b"]);
+    assert!(body.contains(&format!("upstream: {url}")), "body: {body}");
+
+    // The default (no config, no flag) keeps the structured format.
+    git_in(&host, &["config", "--unset", "include.commitTemplate"]);
+    upstream_commit(&up_work, "n2.txt", "n\n", "more upstream work");
+    include_ok(&host, &["pull", "vendor/lib"]);
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "git include pull vendor/lib");
+}
+
 // ------------------------------------------------------- init / export ----
 
 #[test]

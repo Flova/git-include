@@ -1,12 +1,18 @@
 use anyhow::{Context, Result, bail};
 
-use crate::git::Git;
+use crate::git::{Git, RevKind};
 use crate::gitrepo::MARKER_FILE;
 use crate::lfs;
 use crate::ops::{Include, commit_message, find_all_includes};
 use crate::util::short;
 
-pub fn run(git: &Git, subdir: Option<&str>, all: bool, no_lfs: bool) -> Result<()> {
+pub struct PullOptions<'a> {
+    pub force: bool,
+    pub message: Option<&'a str>,
+    pub no_lfs: bool,
+}
+
+pub fn run(git: &Git, subdir: Option<&str>, all: bool, opts: &PullOptions<'_>) -> Result<()> {
     let targets: Vec<String> = if all {
         find_all_includes(git)?
     } else if let Some(s) = subdir {
@@ -26,55 +32,76 @@ pub fn run(git: &Git, subdir: Option<&str>, all: bool, no_lfs: bool) -> Result<(
 
     for subdir in &targets {
         let inc = Include::load(git, subdir)?;
-        sync(inc, None, "pull", no_lfs)?;
+        sync(inc, None, None, "pull", opts)?;
     }
     Ok(())
 }
 
-/// Shared sync engine used by `pull` (same branch) and `switch` (another
-/// branch). Fetches upstream, three-way merges it with local changes and
-/// commits the result — or leaves conflict markers for the user to resolve.
-pub fn sync(inc: Include<'_>, new_branch: Option<&str>, action: &str, no_lfs: bool) -> Result<()> {
+/// Shared sync engine used by `pull` (same ref) and `switch` (another
+/// branch/tag/commit). Fetches upstream, three-way merges it with local
+/// changes and commits the result — or leaves conflict markers for the
+/// user to resolve. With `force`, local changes to the directory are
+/// discarded and upstream content is taken verbatim.
+pub fn sync(
+    inc: Include<'_>,
+    new_rev: Option<&str>,
+    expect: Option<RevKind>,
+    action: &str,
+    opts: &PullOptions<'_>,
+) -> Result<()> {
     let git = inc.git;
-    git.require_clean_worktree(&format!("{action} '{}'", inc.subdir))?;
-
-    let branch = new_branch.unwrap_or(&inc.meta.branch).to_string();
-    eprintln!("Fetching {} ({branch}) ...", inc.meta.remote);
-    let upstream = git.fetch_branch(&inc.meta.remote, &branch, &inc.pin_ref())?;
-
-    if upstream == inc.meta.commit && branch == inc.meta.branch {
-        println!("'{}' is already up to date with {branch}.", inc.subdir);
-        return Ok(());
+    if !opts.force {
+        git.require_clean_worktree(&format!("{action} '{}'", inc.subdir))?;
     }
 
-    inc.ensure_base_commit()?;
-    let base_tree = inc
-        .base_tree()
-        .context("base commit exists but has no tree")?;
-    let local_stripped = inc.local_tree_stripped()?;
+    let rev = new_rev.unwrap_or(&inc.meta.branch).to_string();
+    eprintln!("Fetching {} ({rev}) ...", inc.meta.remote);
+    let (upstream, kind) = git.fetch_rev(&inc.meta.remote, &rev, expect, &inc.pin_ref())?;
+
     let upstream_tree = git
         .rev_parse(&format!("{upstream}^{{tree}}"))
         .context("fetched commit has no tree")?;
+    let same_target = upstream == inc.meta.commit && rev == inc.meta.branch;
+    if same_target && !opts.force {
+        match kind {
+            RevKind::Branch => println!("'{}' is already up to date with {rev}.", inc.subdir),
+            _ => println!(
+                "'{}' is up to date (pinned to {} '{rev}').",
+                inc.subdir,
+                kind.label()
+            ),
+        }
+        return Ok(());
+    }
 
-    let (merged_stripped, conflicts) =
+    let (merged_stripped, conflicts) = if opts.force {
+        // Discard local state: upstream verbatim.
+        (upstream_tree.clone(), Vec::new())
+    } else {
+        inc.ensure_base_commit()?;
+        let base_tree = inc
+            .base_tree()
+            .context("base commit exists but has no tree")?;
+        let local_stripped = inc.local_tree_stripped()?;
         if local_stripped == base_tree || local_stripped == upstream_tree {
             // No local changes since the last sync (or content already
             // matches upstream): take upstream verbatim, no merge needed.
-            (upstream_tree, Vec::new())
+            (upstream_tree.clone(), Vec::new())
         } else {
-            let (merged, conflicts) =
-                git.merge_trees_3way(&base_tree, &local_stripped, &upstream_tree)?;
-            (merged, conflicts)
-        };
+            git.merge_trees_3way(&base_tree, &local_stripped, &upstream_tree)?
+        }
+    };
 
     // Attach the updated marker file to the merged tree. Note that
-    // `parent` is deliberately NOT advanced by a pull: it marks the last
-    // host commit whose changes are already upstream, so local commits
-    // made before this pull can still be pushed individually later.
+    // `parent` is deliberately NOT advanced by a regular pull: it marks
+    // the last host commit whose changes are already upstream, so local
+    // commits made before this pull can still be pushed individually
+    // later. A force pull discards local changes, so there it DOES
+    // advance (nothing local is left to push).
     let mut meta = inc.meta.clone();
-    meta.branch = branch.clone();
+    meta.branch = rev.clone();
     meta.commit = upstream.clone();
-    if meta.parent.is_none() {
+    if opts.force || meta.parent.is_none() {
         meta.parent = Some(git.head()?);
     }
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
@@ -97,27 +124,41 @@ pub fn sync(inc: Include<'_>, new_branch: Option<&str>, action: &str, no_lfs: bo
         eprintln!(
             "\nResolve the conflicts, then finish with:\n  \
              git add {0}\n  git commit\n\n\
-             (the staged {0}/{MARKER_FILE} update is already correct — keep it)",
+             (the staged {0}/{MARKER_FILE} update is already correct — keep it)\n\
+             To discard your local changes instead: git include pull {0} --force",
             inc.subdir
         );
         bail!("merge conflicts in '{}'", inc.subdir);
     }
 
-    inc.commit_subtree(&subtree, &commit_message(action, &inc.subdir, &meta))?;
-    lfs::fetch_and_checkout(git, &meta.remote, &upstream, &inc.subdir, no_lfs);
+    let before = git.head()?;
+    let after = inc.commit_subtree(
+        &subtree,
+        &commit_message(git, opts.message, action, &inc.subdir, &meta),
+    )?;
+    lfs::fetch_and_checkout(git, &meta.remote, &upstream, &inc.subdir, opts.no_lfs);
 
-    if new_branch.is_some() {
-        println!(
-            "Switched '{}' to branch {branch} (commit {}).",
+    if before == after {
+        println!("'{}' already matches {} '{rev}'.", inc.subdir, kind.label());
+        return Ok(());
+    }
+    match (new_rev.is_some(), kind) {
+        (true, RevKind::Branch) => println!(
+            "Switched '{}' to branch {rev} (commit {}).",
             inc.subdir,
             short(&upstream)
-        );
-    } else {
-        println!(
-            "Pulled '{}': now at {branch} commit {}.",
+        ),
+        (true, kind) => println!(
+            "Pinned '{}' to {} '{rev}' (commit {}).",
+            inc.subdir,
+            kind.label(),
+            short(&upstream)
+        ),
+        (false, _) => println!(
+            "Pulled '{}': now at {rev} commit {}.",
             inc.subdir,
             short(&upstream)
-        );
+        ),
     }
     Ok(())
 }

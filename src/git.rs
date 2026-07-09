@@ -20,6 +20,37 @@ pub struct Git {
     pub toplevel: PathBuf,
 }
 
+/// What kind of upstream revision an include tracks.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RevKind {
+    Branch,
+    Tag,
+    Commit,
+}
+
+impl RevKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RevKind::Branch => "branch",
+            RevKind::Tag => "tag",
+            RevKind::Commit => "commit",
+        }
+    }
+}
+
+/// Branch and tag heads advertised by a remote.
+pub struct RemoteRefs {
+    /// (sha, name) pairs.
+    pub branches: Vec<(String, String)>,
+    /// (sha, name) pairs; annotated tags are peeled to their commit.
+    pub tags: Vec<(String, String)>,
+}
+
+/// Could this string be an abbreviated or full commit id?
+pub fn looks_like_oid(s: &str) -> bool {
+    (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 impl Git {
     /// Discover the repository containing `dir`.
     pub fn discover(dir: &Path) -> Result<Self> {
@@ -32,6 +63,15 @@ impl Git {
     }
 
     // ------------------------------------------------------------ basics --
+
+    /// A string value from git config (repo, then global), if set.
+    pub fn config_string(&self, key: &str) -> Option<String> {
+        self.repo
+            .config()
+            .ok()
+            .and_then(|c| c.get_string(key).ok())
+            .filter(|s| !s.is_empty())
+    }
 
     /// Resolve a revision string to a full object id; None if unresolvable.
     pub fn rev_parse(&self, spec: &str) -> Option<String> {
@@ -188,18 +228,35 @@ impl Git {
         Ok(name)
     }
 
-    /// List branch heads on a remote as (sha, branch) pairs.
-    pub fn remote_branches(&self, remote: &str) -> Result<Vec<(String, String)>> {
+    /// List the branch and tag heads a remote advertises.
+    pub fn remote_refs(&self, remote: &str) -> Result<RemoteRefs> {
         let mut r = self.open_remote(remote)?;
         r.connect_auth(Direction::Fetch, Some(self.callbacks()), None)
             .with_context(|| format!("could not connect to {remote}"))?;
         let mut branches = Vec::new();
+        let mut tags: Vec<(String, String)> = Vec::new();
+        let mut peeled: Vec<(String, String)> = Vec::new();
         for head in r.list()? {
-            if let Some(name) = head.name().strip_prefix("refs/heads/") {
-                branches.push((head.oid().to_string(), name.to_string()));
+            let name = head.name();
+            if let Some(b) = name.strip_prefix("refs/heads/") {
+                branches.push((head.oid().to_string(), b.to_string()));
+            } else if let Some(t) = name.strip_prefix("refs/tags/") {
+                match t.strip_suffix("^{}") {
+                    // The peeled entry gives the commit an annotated tag
+                    // points at — prefer it over the tag object id.
+                    Some(t) => peeled.push((head.oid().to_string(), t.to_string())),
+                    None => tags.push((head.oid().to_string(), t.to_string())),
+                }
             }
         }
-        Ok(branches)
+        for (sha, name) in peeled {
+            if let Some(entry) = tags.iter_mut().find(|(_, n)| *n == name) {
+                entry.0 = sha;
+            } else {
+                tags.push((sha, name));
+            }
+        }
+        Ok(RemoteRefs { branches, tags })
     }
 
     fn fetch_options(&self) -> FetchOptions<'_> {
@@ -212,22 +269,95 @@ impl Git {
         fo
     }
 
-    /// Fetch `branch` from `remote` and return the fetched commit id.
-    /// The commit is pinned under `pin_ref` so it survives `git gc` and is
-    /// reusable for offline status/diff. Fails if the remote does not have
-    /// the branch (libgit2 treats an unmatched refspec as a successful
-    /// no-op fetch, so the pin ref is cleared first to detect that).
-    pub fn fetch_branch(&self, remote: &str, branch: &str, pin_ref: &str) -> Result<String> {
-        self.delete_ref(pin_ref);
+    fn fetch_refspecs(&self, remote: &str, refspecs: &[String]) -> Result<()> {
         let mut r = self.open_remote(remote)?;
-        let refspec = format!("+refs/heads/{branch}:{pin_ref}");
-        r.fetch(&[&refspec], Some(&mut self.fetch_options()), None)
-            .with_context(|| format!("could not fetch branch '{branch}' from {remote}"))?;
-        Ok(self
+        let specs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
+        r.fetch(&specs, Some(&mut self.fetch_options()), None)
+            .with_context(|| format!("could not fetch from {remote}"))?;
+        Ok(())
+    }
+
+    /// Fetch `rev` — a branch, tag, or commit id — from `remote`, returning
+    /// the resolved commit and what kind of revision it turned out to be.
+    /// `expect` restricts the lookup (e.g. `--tag` on the command line).
+    /// The commit is pinned under `pin_ref` so it survives `git gc` and is
+    /// reusable for offline status/diff.
+    pub fn fetch_rev(
+        &self,
+        remote: &str,
+        rev: &str,
+        expect: Option<RevKind>,
+        pin_ref: &str,
+    ) -> Result<(String, RevKind)> {
+        let refs = self.remote_refs(remote)?;
+        let want = |k: RevKind| expect.is_none() || expect == Some(k);
+
+        if want(RevKind::Branch) && refs.branches.iter().any(|(_, n)| n == rev) {
+            self.delete_ref(pin_ref);
+            self.fetch_refspecs(remote, &[format!("+refs/heads/{rev}:{pin_ref}")])?;
+            let sha = self
+                .repo
+                .refname_to_id(pin_ref)
+                .with_context(|| format!("fetched branch '{rev}' does not resolve"))?
+                .to_string();
+            return Ok((sha, RevKind::Branch));
+        }
+
+        if want(RevKind::Tag) && refs.tags.iter().any(|(_, n)| n == rev) {
+            self.delete_ref(pin_ref);
+            self.fetch_refspecs(remote, &[format!("+refs/tags/{rev}:{pin_ref}")])?;
+            // Annotated tags need peeling to the commit they point at.
+            let sha = self
+                .rev_parse(&format!("{pin_ref}^{{commit}}"))
+                .with_context(|| format!("tag '{rev}' does not point at a commit"))?;
+            self.set_ref(pin_ref, &sha)?;
+            return Ok((sha, RevKind::Tag));
+        }
+
+        if want(RevKind::Commit) && looks_like_oid(rev) {
+            // Try a direct fetch-by-id first (works on servers that allow
+            // it); otherwise fetch all heads and tags and resolve locally.
+            let direct = rev.len() == 40
+                && self
+                    .fetch_refspecs(remote, &[format!("+{rev}:{pin_ref}")])
+                    .is_ok();
+            if !direct && self.rev_parse(&format!("{rev}^{{commit}}")).is_none() {
+                self.fetch_refspecs(
+                    remote,
+                    &[
+                        "+refs/heads/*:refs/include/scan/heads/*".to_string(),
+                        "+refs/tags/*:refs/include/scan/tags/*".to_string(),
+                    ],
+                )?;
+                self.delete_scan_refs();
+            }
+            if let Some(sha) = self.rev_parse(&format!("{rev}^{{commit}}")) {
+                self.set_ref(pin_ref, &sha)?;
+                return Ok((sha, RevKind::Commit));
+            }
+        }
+
+        match expect {
+            Some(kind) => bail!("'{rev}' is not a {} on {remote}", kind.label()),
+            None => bail!("'{rev}' is not a branch, tag, or commit on {remote}"),
+        }
+    }
+
+    /// Remove the temporary refs used when scanning a remote for a commit.
+    fn delete_scan_refs(&self) {
+        let names: Vec<String> = self
             .repo
-            .refname_to_id(pin_ref)
-            .with_context(|| format!("branch '{branch}' does not exist on {remote}"))?
-            .to_string())
+            .references()
+            .map(|refs| {
+                refs.filter_map(|r| r.ok())
+                    .filter_map(|r| r.name().ok().map(str::to_string))
+                    .filter(|n| n.starts_with("refs/include/scan/"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for name in names {
+            self.delete_ref(&name);
+        }
     }
 
     /// Best-effort fetch of a single commit by id (used to recover base

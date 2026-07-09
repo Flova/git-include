@@ -32,14 +32,14 @@ fn print_one(git: &Git, subdir: &str, fetch: bool) -> Result<()> {
     println!("{subdir}");
     println!("  remote:   {}", inc.meta.remote);
     println!(
-        "  branch:   {} (synced at {})",
+        "  ref:      {} (synced at {})",
         inc.meta.branch,
         short(&inc.meta.commit)
     );
 
     if fetch {
         eprintln!("  (fetching {} ...)", inc.meta.remote);
-        let _ = git.fetch_branch(&inc.meta.remote, &inc.meta.branch, &inc.pin_ref());
+        let _ = git.fetch_rev(&inc.meta.remote, &inc.meta.branch, None, &inc.pin_ref());
     }
 
     // Upstream side: commits we have not pulled yet.

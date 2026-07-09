@@ -1,18 +1,20 @@
 use anyhow::{Context, Result, bail};
 
-use crate::git::Git;
+use crate::git::{Git, RevKind};
 use crate::gitrepo::{GitRepoFile, MARKER_FILE, validate_subdir};
 use crate::lfs;
 use crate::ops::commit_message;
 use crate::util::{pin_ref, short};
 
-pub fn run(
-    git: &Git,
-    remote: &str,
-    subdir: &str,
-    branch: Option<&str>,
-    no_lfs: bool,
-) -> Result<()> {
+pub struct AddOptions<'a> {
+    /// Branch, tag, or commit to track, with an optional kind restriction
+    /// from the `--branch`/`--tag`/`--commit` flags.
+    pub rev: Option<(&'a str, RevKind)>,
+    pub message: Option<&'a str>,
+    pub no_lfs: bool,
+}
+
+pub fn run(git: &Git, remote: &str, subdir: &str, opts: &AddOptions<'_>) -> Result<()> {
     validate_subdir(subdir)?;
     git.require_clean_worktree("add an included repository")?;
     let head = git.head()?;
@@ -33,19 +35,19 @@ pub fn run(
         bail!("'{subdir}' already contains tracked files");
     }
 
-    let branch = match branch {
-        Some(b) => b.to_string(),
+    let (rev, expect) = match opts.rev {
+        Some((rev, kind)) => (rev.to_string(), Some(kind)),
         None => {
             let b = git.remote_default_branch(remote)?;
-            eprintln!("No branch given; using upstream default branch '{b}'.");
-            b
+            eprintln!("No revision given; using upstream default branch '{b}'.");
+            (b, Some(RevKind::Branch))
         }
     };
 
-    eprintln!("Fetching {remote} ({branch}) ...");
-    let commit = git.fetch_branch(remote, &branch, &pin_ref(subdir))?;
+    eprintln!("Fetching {remote} ({rev}) ...");
+    let (commit, kind) = git.fetch_rev(remote, &rev, expect, &pin_ref(subdir))?;
 
-    let meta = GitRepoFile::new(remote, &branch, &commit, Some(&head));
+    let meta = GitRepoFile::new(remote, &rev, &commit, Some(&head));
     let upstream_tree = git
         .rev_parse(&format!("{commit}^{{tree}}"))
         .context("fetched commit has no tree")?;
@@ -53,13 +55,23 @@ pub fn run(
 
     let root = git.root_tree_with_subtree(subdir, Some(&subtree))?;
     git.apply_tree_prefix(&root, subdir)?;
-    git.commit_on_head(&commit_message("add", subdir, &meta), &root)?;
+    git.commit_on_head(
+        &commit_message(git, opts.message, "add", subdir, &meta),
+        &root,
+    )?;
 
-    lfs::fetch_and_checkout(git, remote, &commit, subdir, no_lfs);
+    lfs::fetch_and_checkout(git, remote, &commit, subdir, opts.no_lfs);
 
-    println!(
-        "Added '{subdir}' from {remote} (branch {branch}, commit {}).",
-        short(&commit)
-    );
+    match kind {
+        RevKind::Branch => println!(
+            "Added '{subdir}' from {remote} (branch {rev}, commit {}).",
+            short(&commit)
+        ),
+        _ => println!(
+            "Added '{subdir}' from {remote}, pinned to {} '{rev}' (commit {}).",
+            kind.label(),
+            short(&commit)
+        ),
+    }
     Ok(())
 }

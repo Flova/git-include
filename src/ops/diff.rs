@@ -13,7 +13,7 @@ pub fn run(git: &Git, subdir: &str, upstream: bool, fetch: bool, stat: bool) -> 
 
     if fetch {
         eprintln!("Fetching {} ({}) ...", inc.meta.remote, inc.meta.branch);
-        git.fetch_branch(&inc.meta.remote, &inc.meta.branch, &inc.pin_ref())?;
+        git.fetch_rev(&inc.meta.remote, &inc.meta.branch, None, &inc.pin_ref())?;
     }
 
     let local = inc.local_tree_stripped()?;

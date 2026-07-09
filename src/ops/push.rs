@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 
-use crate::git::Git;
+use crate::git::{Git, looks_like_oid};
 use crate::gitrepo::MARKER_FILE;
 use crate::lfs;
 use crate::ops::{Include, commit_message};
@@ -59,6 +59,12 @@ pub fn plan_replay(inc: &Include<'_>, start_commit: &str) -> Result<ReplayPlan> 
         if cur == prev {
             continue; // did not change the included directory
         }
+        if is_verbatim_sync_commit(inc, &commit, &cur) {
+            // A sync commit that took some upstream state verbatim (force
+            // pull, add, clean switch): its diff is real but its content
+            // never represents local work — skip it explicitly.
+            continue;
+        }
         let merged = if prev == tip_tree {
             cur.clone() // applies verbatim
         } else {
@@ -78,7 +84,39 @@ pub fn plan_replay(inc: &Include<'_>, start_commit: &str) -> Result<ReplayPlan> 
     Ok(plan)
 }
 
-pub fn run(git: &Git, subdir: &str, dry_run: bool, squash: bool, no_lfs: bool) -> Result<()> {
+/// Did `commit` update the marker file AND leave the directory content at
+/// exactly the upstream tree its marker records? That combination uniquely
+/// identifies sync commits that took upstream verbatim (force pull, add,
+/// clean switch) — content that must never be replayed as local work.
+fn is_verbatim_sync_commit(inc: &Include<'_>, commit: &str, stripped_tree: &str) -> bool {
+    let git = inc.git;
+    let marker_path = format!("{}/{MARKER_FILE}", inc.subdir);
+    let marker_now = git.rev_parse(&format!("{commit}:{marker_path}"));
+    let marker_before = git.rev_parse(&format!("{commit}^:{marker_path}"));
+    if marker_now.is_none() || marker_now == marker_before {
+        return false; // not a sync commit
+    }
+    let Some(recorded) = marker_now
+        .and_then(|blob| git.repo.find_blob(git2::Oid::from_str(&blob).ok()?).ok())
+        .and_then(|blob| {
+            crate::gitrepo::GitRepoFile::parse(&String::from_utf8_lossy(blob.content())).ok()
+        })
+        .map(|meta| meta.commit)
+    else {
+        return false;
+    };
+    git.rev_parse(&format!("{recorded}^{{tree}}")).as_deref() == Some(stripped_tree)
+}
+
+pub struct PushOptions<'a> {
+    pub dry_run: bool,
+    pub squash: bool,
+    pub message: Option<&'a str>,
+    pub no_lfs: bool,
+}
+
+pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
+    let (dry_run, squash, no_lfs) = (opts.dry_run, opts.squash, opts.no_lfs);
     let inc = Include::load(git, subdir)?;
     git.require_clean_worktree(&format!("push '{subdir}'"))?;
 
@@ -224,7 +262,10 @@ pub fn run(git: &Git, subdir: &str, dry_run: bool, squash: bool, no_lfs: bool) -
     meta.parent = Some(git.head()?);
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
     let subtree = git.tree_with_blob(&local, MARKER_FILE, meta.serialize().as_bytes())?;
-    inc.commit_subtree(&subtree, &commit_message("push", subdir, &meta))?;
+    inc.commit_subtree(
+        &subtree,
+        &commit_message(git, opts.message, "push", subdir, &meta),
+    )?;
 
     if upstream.is_none() {
         println!(
@@ -244,17 +285,40 @@ pub fn run(git: &Git, subdir: &str, dry_run: bool, squash: bool, no_lfs: bool) -
     Ok(())
 }
 
-/// Fetch the upstream branch head; Ok(None) when the branch simply does
-/// not exist on the remote yet (a reachable remote is still required).
+/// Fetch the upstream branch head. Ok(None) when the branch simply does
+/// not exist on the remote yet (a reachable remote is still required),
+/// and a clear error when the include is pinned to a tag or commit —
+/// there is nothing sensible to push to in that case.
 fn fetch_upstream_head(inc: &Include<'_>) -> Result<Option<String>> {
-    match inc
-        .git
-        .fetch_branch(&inc.meta.remote, &inc.meta.branch, &inc.pin_ref())
-    {
-        Ok(sha) => Ok(Some(sha)),
-        Err(err) => match inc.git.remote_branches(&inc.meta.remote) {
-            Ok(branches) if !branches.iter().any(|(_, n)| n == &inc.meta.branch) => Ok(None),
-            _ => Err(err),
-        },
+    let git = inc.git;
+    let rev = &inc.meta.branch;
+    let refs = git.remote_refs(&inc.meta.remote)?;
+    if refs.branches.iter().any(|(_, n)| n == rev) {
+        let (sha, _) = git.fetch_rev(
+            &inc.meta.remote,
+            rev,
+            Some(crate::git::RevKind::Branch),
+            &inc.pin_ref(),
+        )?;
+        return Ok(Some(sha));
     }
+    if refs.tags.iter().any(|(_, n)| n == rev) {
+        bail!(
+            "'{}' is pinned to tag '{rev}'; pushing to a tag is not possible.\n\
+             Track a branch first: git include switch {} <branch>",
+            inc.subdir,
+            inc.subdir
+        );
+    }
+    if looks_like_oid(rev) {
+        bail!(
+            "'{}' is pinned to commit {}; there is no branch to push to.\n\
+             Track a branch first: git include switch {} <branch>",
+            inc.subdir,
+            crate::util::short(rev),
+            inc.subdir
+        );
+    }
+    // An unknown branch name: it will be created by this push.
+    Ok(None)
 }

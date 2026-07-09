@@ -6,6 +6,7 @@ pub mod list;
 pub mod pull;
 pub mod push;
 pub mod remove;
+pub mod selfupdate;
 pub mod status;
 
 use anyhow::{Context, Result, bail};
@@ -92,12 +93,16 @@ impl<'a> Include<'a> {
 
     /// Commit `subtree` (already carrying the right marker file) as the new
     /// content of the included directory: updates worktree + index, then
-    /// creates one commit on HEAD.
+    /// creates one commit on HEAD. A no-op (returning the current HEAD)
+    /// when nothing would change.
     pub fn commit_subtree(&self, subtree: &str, message: &str) -> Result<String> {
         let root = self
             .git
             .root_tree_with_subtree(&self.subdir, Some(subtree))?;
         self.git.apply_tree_prefix(&root, &self.subdir)?;
+        if self.git.rev_parse("HEAD^{tree}").as_deref() == Some(root.as_str()) {
+            return self.git.head();
+        }
         self.git.commit_on_head(message, &root)
     }
 }
@@ -119,16 +124,42 @@ pub fn find_all_includes(git: &Git) -> Result<Vec<String>> {
     Ok(dirs)
 }
 
-/// The standard commit-message body identifying an include action.
-pub fn commit_message(action: &str, inc_subdir: &str, meta: &GitRepoFile) -> String {
-    format!(
-        "git include {action} {inc_subdir}\n\n\
-         include:\n  subdir: \"{}\"\n  remote: \"{}\"\n  branch: \"{}\"\n  commit: \"{}\"\n\
-         git-include-version: {}",
-        inc_subdir,
-        meta.remote,
-        meta.branch,
-        meta.commit,
-        env!("CARGO_PKG_VERSION"),
+/// The default template for sync commit messages (see [`commit_message`]).
+pub const DEFAULT_COMMIT_TEMPLATE: &str = "git include {{ action }} {{ subdir }}\n\
+     \n\
+     include:\n\
+     \x20 subdir: \"{{ subdir }}\"\n\
+     \x20 remote: \"{{ remote }}\"\n\
+     \x20 ref: \"{{ ref }}\"\n\
+     \x20 commit: \"{{ commit }}\"\n\
+     git-include-version: {{ version }}";
+
+/// Render the message for a sync commit. Template precedence: `--message`
+/// on the command line, then the `include.commitTemplate` git config key,
+/// then [`DEFAULT_COMMIT_TEMPLATE`]. Templates use `{{ variable }}`
+/// substitution (see the `template` module).
+pub fn commit_message(
+    git: &Git,
+    cli_template: Option<&str>,
+    action: &str,
+    inc_subdir: &str,
+    meta: &GitRepoFile,
+) -> String {
+    let template = cli_template
+        .map(str::to_string)
+        .or_else(|| git.config_string("include.commitTemplate"))
+        .unwrap_or_else(|| DEFAULT_COMMIT_TEMPLATE.to_string());
+    crate::template::render(
+        &template,
+        &[
+            ("action", action.to_string()),
+            ("subdir", inc_subdir.to_string()),
+            ("remote", meta.remote.clone()),
+            ("ref", meta.branch.clone()),
+            ("branch", meta.branch.clone()),
+            ("commit", meta.commit.clone()),
+            ("short_commit", crate::util::short(&meta.commit).to_string()),
+            ("version", env!("CARGO_PKG_VERSION").to_string()),
+        ],
     )
 }

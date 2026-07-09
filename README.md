@@ -40,6 +40,8 @@ $ git include push vendor/widgets      # contribute your changes back
 - [Tab completion](#tab-completion)
 - [Quickstart](#quickstart)
 - [Command reference](#command-reference)
+- [Pinning to tags and commits](#pinning-to-tags-and-commits)
+- [Custom commit messages](#custom-commit-messages)
 - [The `.gitrepo` marker file](#the-gitrepo-marker-file)
 - [Git LFS](#git-lfs)
 - [Exporting a directory into its own repository](#exporting-a-directory-into-its-own-repository)
@@ -79,7 +81,31 @@ operated on.
 
 ## Installation
 
-Build from source (needs a current stable Rust; libgit2 is vendored and
+**Linux / macOS — one-liner:**
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh | bash
+```
+
+The script detects your platform, downloads the latest release binary and
+installs it to `~/.local/bin` (or `/usr/local/bin` as root). Pin a version
+with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
+`GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
+
+```console
+$ git include self-update            # or --version vX.Y.Z, or -n to preview
+```
+
+**Windows:** download the MSI installer from the
+[latest release](https://github.com/flova/git-include/releases/latest) —
+it installs `git-include.exe` and puts it on `PATH`. (`self-update` works
+on Windows too.)
+
+**Conda:** every release ships a `.conda` package (see the release assets;
+installable into a channel of your choice — the recipe lives in
+`conda/recipe.yaml`).
+
+**From source** (needs a current stable Rust; libgit2 is vendored and
 compiled in, so there is no system dependency beyond OpenSSL on Linux):
 
 ```console
@@ -158,6 +184,10 @@ and conflict markers when both sides touched the same lines. The result is a
 single commit in your repository. `git include pull --all` syncs every
 included directory; with a single include, plain `git include pull` suffices.
 
+When the directory's local state is beyond saving, `git include pull
+--force` discards it — committed or not — and takes upstream verbatim.
+Force-discarded changes are also excluded from future pushes.
+
 ### Push your changes upstream
 
 ```console
@@ -197,26 +227,78 @@ Switched 'vendor/widgets' to branch next (commit 5d6e7f8).
 
 Local changes are carried over (merged) when switching; a clean directory is
 simply swapped to the new branch's content. Switching back is the same
-command again.
+command again. `switch` also accepts a tag or commit id — see
+[Pinning to tags and commits](#pinning-to-tags-and-commits).
 
 ## Command reference
 
 | Command | Description |
 | --- | --- |
-| `git include add <remote> <dir> [-b <branch>]` | Vendor an upstream repository into `<dir>`. Uses the remote's default branch unless `-b` is given. |
-| `git include pull [<dir>] [--all]` | Merge new upstream commits into `<dir>` (or all includes). |
+| `git include add <remote> <dir> [-b <branch> \| -t <tag> \| --commit <sha>]` | Vendor an upstream repository into `<dir>`, tracking a branch (default: the remote's default branch) or pinned to a tag/commit. |
+| `git include pull [<dir>] [--all] [--force]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes. |
 | `git include push <dir> [-n/--dry-run]` | Replay local commits touching `<dir>` onto the upstream branch and push. |
 | `git include status [<dir>] [-f/--fetch]` | Show sync state: commits available upstream, commits to push, uncommitted edits. |
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
-| `git include switch <dir> <branch>` | Track a different upstream branch, carrying local changes over. |
-| `git include branches <dir>` | List upstream branches, marking the tracked one. |
+| `git include switch <dir> <branch\|tag\|commit>` | Track a different branch, or pin to a tag/commit, carrying local changes over. |
+| `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
 | `git include list` | List all includes, nested ones indented. |
 | `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
 | `git include completions <shell>` | Print a tab-completion script. |
+| `git include self-update [--version <tag>]` | Update the git-include binary to the latest (or a specific) release. |
 
 All `<dir>` arguments are relative to your current directory, so the commands
 work from anywhere inside the repository. `--no-lfs` is accepted by `add`,
-`pull`, `push` and `switch` to skip LFS transfers.
+`pull`, `push` and `switch` to skip LFS transfers; `-m/--message` is
+accepted by every command that creates a sync commit (see
+[Custom commit messages](#custom-commit-messages)).
+
+## Pinning to tags and commits
+
+Unlike git-subrepo, an include does not have to track a branch — it can be
+pinned to an exact upstream state:
+
+```console
+$ git include add https://github.com/example/widgets vendor/widgets --tag v2.1.0
+$ git include add https://github.com/example/parser  vendor/parser  --commit 9f8e7d6c...
+$ git include switch vendor/widgets v2.2.0     # move between releases
+$ git include switch vendor/widgets main       # back to tracking a branch
+```
+
+`switch` resolves its argument automatically (branch first, then tag, then
+commit id), so moving between releases and branch-tracking is one command
+either way. A pinned include is fully reproducible: `pull` reports the pin
+instead of moving, `status`/`diff` compare against the pinned state, and
+`push` refuses with a pointer to `switch` (there is no branch to push to).
+Local edits are carried over when switching — or discarded with
+`switch --force`.
+
+## Custom commit messages
+
+The messages of the sync commits git-include creates (add, pull, switch,
+push bookkeeping, init, remove) are templatable with a lightweight
+Jinja-style syntax — `{{ variable }}` substitution:
+
+```console
+# per repository (or --global), for all sync commits:
+$ git config include.commitTemplate 'chore(vendor): {{ action }} {{ subdir }} @ {{ short_commit }}'
+
+# or per invocation:
+$ git include pull vendor/widgets -m 'vendor: update widgets to {{ short_commit }}'
+```
+
+| Variable | Value |
+| --- | --- |
+| `{{ action }}` | `add`, `pull`, `switch`, `push`, `init`, or `remove` |
+| `{{ subdir }}` | the included directory |
+| `{{ remote }}` | upstream URL |
+| `{{ ref }}` (alias `{{ branch }}`) | the tracked branch/tag/commit |
+| `{{ commit }}` / `{{ short_commit }}` | the upstream commit (full / 7 chars) |
+| `{{ version }}` | the git-include version |
+
+The literal sequence `\n` becomes a newline, so multi-line messages fit in
+a single-line config value. Unknown variables are left in place so typos
+stay visible. Without a template, git-include writes its default structured
+message (`git include <action> <dir>` plus a metadata block).
 
 ## The `.gitrepo` marker file
 

@@ -1,5 +1,7 @@
 //! Test harness: builds real git repositories in temp directories and runs
 //! the compiled git-include binary against them.
+// Shared by several test binaries; not every binary uses every helper.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

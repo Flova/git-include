@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  binaries:
+    name: Binary (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin,       os: macos-13 }
+          - { target: aarch64-apple-darwin,      os: macos-latest }
+          - { target: x86_64-pc-windows-msvc,    os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage asset
+        shell: bash
+        run: |
+          mkdir dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/git-include.exe" "dist/git-include-${{ matrix.target }}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/git-include" "dist/git-include-${{ matrix.target }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  msi:
+    name: Windows MSI installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-wix --locked
+      - run: cargo wix --nocapture --output dist/git-include-x86_64.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: dist/*.msi
+          if-no-files-found: error
+
+  conda:
+    name: Conda package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/rattler-build-action@v0.2.34
+        with:
+          recipe-path: conda/recipe.yaml
+          upload-artifact: false
+          build-args: --output-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda
+          path: dist/**/*.conda
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [binaries, msi, conda]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Collect conda packages at top level
+        run: find assets -name '*.conda' -exec mv {} assets/ \; || true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/git-include-*
+            assets/*.conda
+          generate_release_notes: true
+      # Optional: publish the conda package to an anaconda.org channel when
+      # a token is configured (Settings -> Secrets -> ANACONDA_API_TOKEN).
+      - name: Upload to anaconda.org
+        if: ${{ env.ANACONDA_API_TOKEN != '' }}
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          pipx install anaconda-client
+          anaconda -t "$ANACONDA_API_TOKEN" upload --force assets/*.conda

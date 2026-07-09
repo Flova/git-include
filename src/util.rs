@@ -73,3 +73,26 @@ pub fn pin_ref(subdir: &str) -> String {
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{pin_ref, short};
+
+    #[test]
+    fn pin_refs_are_valid_and_stable() {
+        assert_eq!(pin_ref("vendor/lib"), "refs/include/vendor/lib");
+        assert_eq!(pin_ref("with space"), "refs/include/with-space");
+        assert_eq!(pin_ref("weird~^:name"), "refs/include/weird---name");
+        assert_eq!(
+            pin_ref("/leading/trailing/"),
+            "refs/include/leading/trailing"
+        );
+    }
+
+    #[test]
+    fn short_truncates_but_never_panics() {
+        assert_eq!(short("0123456789abcdef"), "0123456");
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
+    }
+}

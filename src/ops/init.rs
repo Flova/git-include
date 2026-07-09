@@ -15,7 +15,13 @@ use crate::gitrepo::{GitRepoFile, MARKER_FILE, validate_subdir};
 use crate::ops::commit_message;
 use crate::util::{pin_ref, short};
 
-pub fn run(git: &Git, subdir: &str, remote: &str, branch: Option<&str>) -> Result<()> {
+pub fn run(
+    git: &Git,
+    subdir: &str,
+    remote: &str,
+    branch: Option<&str>,
+    message: Option<&str>,
+) -> Result<()> {
     validate_subdir(subdir)?;
     git.require_clean_worktree("init an included repository")?;
     let head = git.head()?;
@@ -69,7 +75,7 @@ pub fn run(git: &Git, subdir: &str, remote: &str, branch: Option<&str>) -> Resul
     let subtree = git.tree_with_blob(&stripped, MARKER_FILE, meta.serialize().as_bytes())?;
     let root = git.root_tree_with_subtree(subdir, Some(&subtree))?;
     git.apply_tree_prefix(&root, subdir)?;
-    git.commit_on_head(&commit_message("init", subdir, &meta), &root)?;
+    git.commit_on_head(&commit_message(git, message, "init", subdir, &meta), &root)?;
     // Pin the extracted history so it survives `git gc` until pushed.
     git.set_ref(&pin_ref(subdir), &tip)?;
 
