@@ -1043,9 +1043,37 @@ fn commit_messages_are_templatable_via_flag_and_config() {
     let body = git_in(&host, &["log", "-1", "--format=%b"]);
     assert!(body.contains(&format!("upstream: {url}")), "body: {body}");
 
+    // Full Jinja is available: conditionals and filters.
+    upstream_commit(&up_work, "n2.txt", "n\n", "more upstream work");
+    include_ok(
+        &host,
+        &[
+            "pull",
+            "vendor/lib",
+            "--message",
+            "{% if action == 'pull' %}update{% endif %}: {{ subdir | upper }}",
+        ],
+    );
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "update: VENDOR/LIB");
+
+    // A broken template (typo'd variable) degrades to the default message
+    // with a warning instead of failing the sync.
+    git_in(
+        &host,
+        &["config", "include.commitTemplate", "oops {{ subdri }}"],
+    );
+    upstream_commit(&up_work, "n3.txt", "n\n", "even more upstream work");
+    let out = include_cmd(&host, &["pull", "vendor/lib"]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("warning:"), "got: {stderr}");
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "git include pull vendor/lib");
+
     // The default (no config, no flag) keeps the structured format.
     git_in(&host, &["config", "--unset", "include.commitTemplate"]);
-    upstream_commit(&up_work, "n2.txt", "n\n", "more upstream work");
+    upstream_commit(&up_work, "n4.txt", "n\n", "final upstream work");
     include_ok(&host, &["pull", "vendor/lib"]);
     let subject = git_in(&host, &["log", "-1", "--format=%s"]);
     assert_eq!(subject, "git include pull vendor/lib");

@@ -275,8 +275,9 @@ Local edits are carried over when switching — or discarded with
 ## Custom commit messages
 
 The messages of the sync commits git-include creates (add, pull, switch,
-push bookkeeping, init, remove) are templatable with a lightweight
-Jinja-style syntax — `{{ variable }}` substitution:
+push bookkeeping, init, remove) are templatable with Jinja (via
+[minijinja](https://crates.io/crates/minijinja)) — variables, filters and
+conditionals all work:
 
 ```console
 # per repository (or --global), for all sync commits:
@@ -284,6 +285,10 @@ $ git config include.commitTemplate 'chore(vendor): {{ action }} {{ subdir }} @ 
 
 # or per invocation:
 $ git include pull vendor/widgets -m 'vendor: update widgets to {{ short_commit }}'
+
+# full Jinja expressions are available:
+$ git include pull vendor/widgets \
+    -m '{% if action == "pull" %}⬆{% endif %} {{ subdir | upper }} @ {{ short_commit }}'
 ```
 
 | Variable | Value |
@@ -296,9 +301,11 @@ $ git include pull vendor/widgets -m 'vendor: update widgets to {{ short_commit 
 | `{{ version }}` | the git-include version |
 
 The literal sequence `\n` becomes a newline, so multi-line messages fit in
-a single-line config value. Unknown variables are left in place so typos
-stay visible. Without a template, git-include writes its default structured
-message (`git include <action> <dir>` plus a metadata block).
+a single-line config value. A broken template (syntax error or unknown
+variable) prints a warning and falls back to the default message — a
+finished sync is never aborted over a typo. Without a template,
+git-include writes its default structured message
+(`git include <action> <dir>` plus a metadata block).
 
 ## The `.gitrepo` marker file
 

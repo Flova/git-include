@@ -136,8 +136,9 @@ pub const DEFAULT_COMMIT_TEMPLATE: &str = "git include {{ action }} {{ subdir }}
 
 /// Render the message for a sync commit. Template precedence: `--message`
 /// on the command line, then the `include.commitTemplate` git config key,
-/// then [`DEFAULT_COMMIT_TEMPLATE`]. Templates use `{{ variable }}`
-/// substitution (see the `template` module).
+/// then [`DEFAULT_COMMIT_TEMPLATE`]. Templates are Jinja (via minijinja;
+/// see the `template` module). A broken user template degrades to the
+/// default message with a warning rather than aborting a finished sync.
 pub fn commit_message(
     git: &Git,
     cli_template: Option<&str>,
@@ -145,21 +146,25 @@ pub fn commit_message(
     inc_subdir: &str,
     meta: &GitRepoFile,
 ) -> String {
+    let vars = [
+        ("action", action.to_string()),
+        ("subdir", inc_subdir.to_string()),
+        ("remote", meta.remote.clone()),
+        ("ref", meta.branch.clone()),
+        ("branch", meta.branch.clone()),
+        ("commit", meta.commit.clone()),
+        ("short_commit", crate::util::short(&meta.commit).to_string()),
+        ("version", env!("CARGO_PKG_VERSION").to_string()),
+    ];
     let template = cli_template
         .map(str::to_string)
-        .or_else(|| git.config_string("include.commitTemplate"))
-        .unwrap_or_else(|| DEFAULT_COMMIT_TEMPLATE.to_string());
-    crate::template::render(
-        &template,
-        &[
-            ("action", action.to_string()),
-            ("subdir", inc_subdir.to_string()),
-            ("remote", meta.remote.clone()),
-            ("ref", meta.branch.clone()),
-            ("branch", meta.branch.clone()),
-            ("commit", meta.commit.clone()),
-            ("short_commit", crate::util::short(&meta.commit).to_string()),
-            ("version", env!("CARGO_PKG_VERSION").to_string()),
-        ],
-    )
+        .or_else(|| git.config_string("include.commitTemplate"));
+    if let Some(template) = template {
+        match crate::template::render(&template, &vars) {
+            Ok(message) => return message,
+            Err(err) => eprintln!("warning: {err:#}; using the default commit message"),
+        }
+    }
+    crate::template::render(DEFAULT_COMMIT_TEMPLATE, &vars)
+        .expect("the default commit template always renders")
 }
