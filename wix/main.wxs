@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<!--
+  WiX source for the git-include Windows installer (built by `cargo wix`
+  in the release workflow). Installs git-include.exe into Program Files
+  and adds it to the system PATH, so `git include` works in any shell.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product
+        Id="*"
+        Name="git-include"
+        UpgradeCode="8B7A3F62-4E1D-4C9A-9B0E-2D5F7C1A6E43"
+        Manufacturer="git-include contributors"
+        Language="1033"
+        Codepage="1252"
+        Version="$(var.Version)">
+
+        <Package
+            Id="*"
+            Keywords="Installer"
+            Description="git-include: vendor external git repositories as plain files"
+            Manufacturer="git-include contributors"
+            InstallerVersion="450"
+            Languages="1033"
+            Compressed="yes"
+            InstallScope="perMachine"
+            SummaryCodepage="1252"/>
+
+        <MajorUpgrade
+            Schedule="afterInstallInitialize"
+            DowngradeErrorMessage="A newer version of git-include is already installed."
+            AllowSameVersionUpgrades="yes"/>
+
+        <Media Id="1" Cabinet="media1.cab" EmbedCab="yes"/>
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="APPLICATIONFOLDER" Name="git-include">
+                    <Directory Id="Bin" Name="bin">
+                        <Component Id="binary0" Guid="9C4E2D71-A85B-4F30-B1D6-3E8A0F5C7B92" Win64="yes">
+                            <File
+                                Id="exe0"
+                                Name="git-include.exe"
+                                DiskId="1"
+                                Source="$(var.CargoTargetBinDir)\git-include.exe"
+                                KeyPath="yes"/>
+                        </Component>
+                        <Component Id="path_env" Guid="D5F81A29-6C3E-4B47-8E90-1F2A4B6D8C05" Win64="yes" KeyPath="yes">
+                            <Environment
+                                Id="PATH"
+                                Name="PATH"
+                                Value="[Bin]"
+                                Permanent="no"
+                                Part="last"
+                                Action="set"
+                                System="yes"/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id="MainProgram"
+            Title="git-include"
+            Description="The git-include executable, available as `git include` on PATH."
+            Level="1"
+            Absent="disallow"
+            AllowAdvertise="no"
+            Display="expand"
+            ConfigurableDirectory="APPLICATIONFOLDER">
+            <ComponentRef Id="binary0"/>
+            <ComponentRef Id="path_env"/>
+        </Feature>
+
+        <SetProperty Id="ARPINSTALLLOCATION" Value="[APPLICATIONFOLDER]" After="CostFinalize"/>
+        <Property Id="ARPHELPLINK" Value="https://github.com/flova/git-include"/>
+        <Property Id="ARPURLINFOABOUT" Value="https://github.com/flova/git-include"/>
+    </Product>
+</Wix>

@@ -1,0 +1,96 @@
+use anyhow::Result;
+
+use crate::git::Git;
+use crate::ops::push::plan_replay;
+use crate::ops::{Include, find_all_includes};
+use crate::util::short;
+
+pub fn run(git: &Git, subdir: Option<&str>, fetch: bool) -> Result<()> {
+    let targets: Vec<String> = match subdir {
+        Some(s) => vec![s.to_string()],
+        None => {
+            let all = find_all_includes(git)?;
+            if all.is_empty() {
+                println!("No included repositories. Use `git include add <remote> <dir>`.");
+                return Ok(());
+            }
+            all
+        }
+    };
+
+    for (i, dir) in targets.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        print_one(git, dir, fetch)?;
+    }
+    Ok(())
+}
+
+fn print_one(git: &Git, subdir: &str, fetch: bool) -> Result<()> {
+    let inc = Include::load(git, subdir)?;
+    println!("{subdir}");
+    println!("  remote:   {}", inc.meta.remote);
+    println!(
+        "  ref:      {} (synced at {})",
+        inc.meta.branch,
+        short(&inc.meta.commit)
+    );
+
+    if fetch {
+        eprintln!("  (fetching {} ...)", inc.meta.remote);
+        let _ = git.fetch_rev(&inc.meta.remote, &inc.meta.branch, None, &inc.pin_ref());
+    }
+
+    // Upstream side: commits we have not pulled yet.
+    match inc.pinned_upstream() {
+        Some(upstream) if git.has_commit(&inc.meta.commit) => {
+            if upstream == inc.meta.commit {
+                println!("  upstream: up to date");
+            } else {
+                let behind = git
+                    .count_range(&inc.meta.commit, &upstream)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|_| "?".into());
+                println!(
+                    "  upstream: {behind} new commit(s) available -> `git include pull {subdir}`"
+                );
+            }
+        }
+        _ => println!("  upstream: unknown (run `git include status {subdir} --fetch`)"),
+    }
+
+    // Local side: unpushed commits and uncommitted edits.
+    match (inc.local_tree_stripped(), inc.base_tree()) {
+        (Ok(local), Some(base)) => {
+            let unpushed = count_unpushed(&inc).unwrap_or(0);
+            if local == base && unpushed == 0 {
+                println!("  local:    clean");
+            } else if unpushed > 0 {
+                println!("  local:    {unpushed} commit(s) to push -> `git include push {subdir}`");
+            } else {
+                println!("  local:    modified since last sync (`git include diff {subdir}`)");
+            }
+        }
+        _ => println!("  local:    unknown (upstream base commit not available locally)"),
+    }
+    if git.subdir_has_uncommitted(subdir) {
+        println!("  worktree: uncommitted changes in '{subdir}' (see `git status`)");
+    }
+    Ok(())
+}
+
+/// Number of commits `push` would create (it runs the exact same replay
+/// planning as push, so the count matches what push will do).
+pub fn count_unpushed(inc: &Include<'_>) -> Result<usize> {
+    let git = inc.git;
+    let Some(parent) = inc.meta.parent.as_deref() else {
+        return Ok(0);
+    };
+    if !git.has_commit(&inc.meta.commit) || !git.has_commit(parent) {
+        return Ok(0);
+    }
+    let plan = plan_replay(inc, &inc.meta.commit)?;
+    // A conflicting remainder is pushed as one combined commit.
+    Ok(plan.steps.len() + usize::from(plan.conflict.is_some()))
+}

@@ -1,0 +1,36 @@
+[package]
+name = "git-include"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "A modern git-subrepo alternative: vendor external repositories as plain files with full two-way sync"
+license = "MIT"
+repository = "https://github.com/flova/git-include"
+readme = "README.md"
+keywords = ["git", "subrepo", "vendoring", "monorepo", "submodule"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "git-include"
+path = "src/main.rs"
+
+[features]
+default = ["self-update"]
+# Compiles the `git include self-update` command. Package-manager builds
+# (conda, distro packages) disable this: there, updating is the package
+# manager's job, and a self-replacing binary would fight it.
+self-update = []
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive", "wrap_help"] }
+clap_complete = "4.6.7"
+git2 = { version = "0.21.0", features = ["https", "ssh", "cred", "vendored-libgit2"] }
+minijinja = "2.21.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+lto = true
+strip = true

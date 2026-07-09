@@ -1,0 +1,55 @@
+# rattler-build recipe for the git-include conda package.
+# Built by the release workflow for linux-64, linux-aarch64, osx-64,
+# osx-arm64 and win-64; the resulting .conda files are attached to every
+# GitHub release and (when ANACONDA_API_TOKEN is configured) uploaded to an
+# anaconda.org channel. Bump `version` together with Cargo.toml.
+#
+# Conda builds compile WITHOUT the `self-update` cargo feature: updating a
+# conda-managed binary is conda's job, not the binary's.
+context:
+  version: "0.1.0"
+
+package:
+  name: git-include
+  version: ${{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  script:
+    - if: unix
+      then:
+        - cargo install --path . --root $PREFIX --locked --no-track --no-default-features
+    - if: win
+      then:
+        - cargo install --path . --root %PREFIX% --locked --no-track --no-default-features
+
+requirements:
+  build:
+    - ${{ compiler('c') }}
+    - rust
+    - if: unix
+      then:
+        - pkg-config
+  host:
+    - if: unix
+      then:
+        - openssl
+  run:
+    - git # optional at runtime, but the natural companion
+
+tests:
+  - script:
+      - git-include --version
+      - if: unix
+        then:
+          - git-include completions bash > /dev/null
+
+about:
+  homepage: https://github.com/flova/git-include
+  repository: https://github.com/flova/git-include
+  summary: Vendor external git repositories as plain files, with full two-way sync
+  license: MIT
+  license_file: LICENSE
