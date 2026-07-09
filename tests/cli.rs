@@ -756,6 +756,119 @@ fn operates_on_marker_written_by_git_subrepo() {
     assert_eq!(read(&clone, "ours.txt"), "o\n");
 }
 
+#[test]
+fn commit_touching_two_includes_pushes_only_relevant_changes() {
+    let env = TestEnv::new();
+    let (url_a, _up_a) = env.upstream("liba");
+    let (url_b, _up_b) = env.upstream("libb");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url_a, "vendor/a"]);
+    include_ok(&host, &["add", &url_b, "vendor/b"]);
+
+    // One host commit spanning both includes (plus an unrelated file).
+    std::fs::write(host.join("vendor/a/from-host.txt"), "for a\n").unwrap();
+    std::fs::write(host.join("vendor/b/from-host.txt"), "for b\n").unwrap();
+    std::fs::write(host.join("unrelated.txt"), "x\n").unwrap();
+    git_in(&host, &["add", "."]);
+    git_in(&host, &["commit", "-q", "-m", "update both vendored libs"]);
+
+    include_ok(&host, &["push", "vendor/a"]);
+    include_ok(&host, &["push", "vendor/b"]);
+
+    for (url, content) in [(&url_a, "for a\n"), (&url_b, "for b\n")] {
+        let clone = env.path(&format!("check-{content}"));
+        git_in(
+            env.root.path(),
+            &["clone", "-q", url, clone.to_str().unwrap()],
+        );
+        assert_eq!(read(&clone, "from-host.txt"), content);
+        assert!(!clone.join("unrelated.txt").exists());
+        let log = git_in(&clone, &["log", "--format=%s", "main"]);
+        assert!(log.contains("update both vendored libs"), "log: {log}");
+    }
+
+    // Both includes are fully synced afterwards.
+    let s = include_ok(&host, &["status"]);
+    assert_eq!(s.matches("clean").count(), 2, "got: {s}");
+}
+
+#[test]
+fn push_after_switch_lands_commits_on_the_new_branch() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    git_in(&up_work, &["checkout", "-q", "-b", "dev"]);
+    upstream_commit(&up_work, "dev.txt", "dev\n", "dev base");
+    git_in(&up_work, &["checkout", "-q", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+    commit_file(
+        &host,
+        "vendor/lib/feature.txt",
+        "f\n",
+        "feature while on main",
+    );
+    include_ok(&host, &["switch", "vendor/lib", "dev"]);
+    include_ok(&host, &["push", "vendor/lib"]);
+
+    // The commit made while tracking main was carried over by the switch
+    // and pushed to dev; main is untouched.
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", "-b", "dev", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "feature.txt"), "f\n");
+    assert_eq!(read(&clone, "dev.txt"), "dev\n");
+    let log = git_in(&clone, &["log", "--format=%s", "dev"]);
+    assert!(log.contains("feature while on main"), "log: {log}");
+    let main_log = git_in(&clone, &["log", "--format=%s", "origin/main"]);
+    assert!(!main_log.contains("feature"), "main log: {main_log}");
+}
+
+#[test]
+fn marker_without_parent_entry_still_pulls_and_pushes() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // git-subrepo tolerates markers without a parent line (e.g. written
+    // by hand); strip it and make sure we degrade gracefully.
+    let commit = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.commit"],
+    );
+    std::fs::write(
+        host.join("vendor/lib/.gitrepo"),
+        format!("[subrepo]\n\tremote = {url}\n\tbranch = main\n\tcommit = {commit}\n"),
+    )
+    .unwrap();
+    git_in(&host, &["commit", "-q", "-am", "strip parent from marker"]);
+
+    // push without a parent is refused with a helpful message ...
+    let err = include_err(&host, &["push", "vendor/lib"]);
+    assert!(err.contains("parent"), "got: {err}");
+
+    // ... and a pull bootstraps the parent, after which push works.
+    upstream_commit(&up_work, "u.txt", "u\n", "upstream work");
+    include_ok(&host, &["pull", "vendor/lib"]);
+    let parent = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.parent"],
+    );
+    assert!(!parent.is_empty(), "pull must bootstrap the parent entry");
+
+    commit_file(&host, "vendor/lib/mine.txt", "m\n", "my change");
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "mine.txt"), "m\n");
+}
+
 // ------------------------------------------------------- init / export ----
 
 #[test]
