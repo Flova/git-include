@@ -31,6 +31,9 @@ pub struct GitRepoFile {
     pub method: String,
     /// Version of the tool that last wrote the file (informational).
     pub cmdver: String,
+    /// Transient: the resolved kind of `branch` when a sync just fetched
+    /// it (branch/tag/commit). Never serialized; used for commit messages.
+    pub ref_kind_hint: Option<crate::git::RevKind>,
 }
 
 impl GitRepoFile {
@@ -42,6 +45,7 @@ impl GitRepoFile {
             parent: parent.map(str::to_string),
             method: "merge".to_string(),
             cmdver: env!("CARGO_PKG_VERSION").to_string(),
+            ref_kind_hint: None,
         }
     }
 
@@ -91,6 +95,7 @@ impl GitRepoFile {
             parent: parent.filter(|p| !p.is_empty() && p != "none"),
             method: method.unwrap_or_else(|| "merge".to_string()),
             cmdver: cmdver.unwrap_or_default(),
+            ref_kind_hint: None,
         })
     }
 

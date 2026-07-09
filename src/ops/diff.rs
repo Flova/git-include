@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
 use git2::{DiffFormat, DiffStatsFormat, Oid};
@@ -44,6 +44,22 @@ pub fn run(git: &Git, subdir: &str, upstream: bool, fetch: bool, stat: bool) -> 
     let new = git.repo.find_tree(Oid::from_str(&local)?)?;
     let diff = git.repo.diff_tree_to_tree(Some(&old), Some(&new), None)?;
 
+    // Colorize like `git diff` when writing to a terminal (NO_COLOR
+    // opts out, https://no-color.org/).
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let paint = |origin: char| -> (&'static str, &'static str) {
+        if !color {
+            return ("", "");
+        }
+        match origin {
+            '+' => ("\x1b[32m", "\x1b[m"), // additions: green
+            '-' => ("\x1b[31m", "\x1b[m"), // deletions: red
+            'H' => ("\x1b[36m", "\x1b[m"), // hunk headers: cyan
+            'F' => ("\x1b[1m", "\x1b[m"),  // file headers: bold
+            _ => ("", ""),
+        }
+    };
+
     let mut stdout = std::io::stdout().lock();
     if stat {
         let stats = diff.stats()?;
@@ -52,10 +68,18 @@ pub fn run(git: &Git, subdir: &str, upstream: bool, fetch: bool, stat: bool) -> 
     } else {
         diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
             let origin = line.origin();
-            if matches!(origin, '+' | '-' | ' ') {
-                let _ = write!(stdout, "{origin}");
-            }
-            stdout.write_all(line.content()).is_ok()
+            let (on, off) = paint(origin);
+            let content = String::from_utf8_lossy(line.content());
+            let (body, newline) = match content.strip_suffix('\n') {
+                Some(body) => (body, "\n"),
+                None => (content.as_ref(), ""),
+            };
+            let prefix = if matches!(origin, '+' | '-' | ' ') {
+                origin.to_string()
+            } else {
+                String::new()
+            };
+            write!(stdout, "{on}{prefix}{body}{off}{newline}").is_ok()
         })?;
     }
     Ok(())

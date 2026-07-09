@@ -47,7 +47,8 @@ pub fn run(git: &Git, remote: &str, subdir: &str, opts: &AddOptions<'_>) -> Resu
     eprintln!("Fetching {remote} ({rev}) ...");
     let (commit, kind) = git.fetch_rev(remote, &rev, expect, &pin_ref(subdir))?;
 
-    let meta = GitRepoFile::new(remote, &rev, &commit, Some(&head));
+    let mut meta = GitRepoFile::new(remote, &rev, &commit, Some(&head));
+    meta.ref_kind_hint = Some(kind);
     let upstream_tree = git
         .rev_parse(&format!("{commit}^{{tree}}"))
         .context("fetched commit has no tree")?;

@@ -53,8 +53,9 @@ pub enum Command {
         /// Pull every included repository
         #[arg(long, conflicts_with = "subdir")]
         all: bool,
-        /// Discard local changes to the directory and take upstream verbatim
-        #[arg(long)]
+        /// Discard local changes to the directory and take upstream
+        /// verbatim (alias: --discard)
+        #[arg(long, alias = "discard")]
         force: bool,
         /// Commit message template for the sync commit
         #[arg(short, long)]
@@ -70,6 +71,10 @@ pub enum Command {
         /// Show what would be pushed without pushing
         #[arg(short = 'n', long)]
         dry_run: bool,
+        /// Push to this (possibly new) branch on the remote instead of the
+        /// tracked one — e.g. a feature branch for an upstream pull request
+        #[arg(short, long)]
+        branch: Option<String>,
         /// Push all local changes as a single squashed commit
         #[arg(long)]
         squash: bool,
@@ -127,7 +132,8 @@ pub enum Command {
         /// Branch to track, or tag/commit to pin to
         rev: String,
         /// Discard local changes instead of carrying them over
-        #[arg(long)]
+        /// (alias: --discard; default is to keep them via a merge)
+        #[arg(long, alias = "discard")]
         force: bool,
         /// Commit message template for the sync commit
         #[arg(short, long)]
@@ -140,6 +146,16 @@ pub enum Command {
     Branches {
         /// Included directory
         subdir: PathBuf,
+    },
+    /// Show or change the upstream remote of an included directory
+    Remote {
+        /// Included directory
+        subdir: PathBuf,
+        /// New remote URL (omit to print the current one)
+        url: Option<String>,
+        /// Commit message template for the sync commit
+        #[arg(short, long)]
+        message: Option<String>,
     },
     /// List all included repositories (including nested ones)
     List,

@@ -67,7 +67,25 @@ pub fn pin_ref(subdir: &str) -> String {
             }
         })
         .collect();
-    format!("refs/include/{}", sanitized.trim_matches('/'))
+    // Git ref-name rules: no component may start with '.' or end in
+    // '.lock' (libgit2 rejects such refs outright).
+    let fixed: Vec<String> = sanitized
+        .trim_matches('/')
+        .split('/')
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            let c = c
+                .strip_prefix('.')
+                .map(|r| format!("-{r}"))
+                .unwrap_or_else(|| c.to_string());
+            if c.ends_with(".lock") {
+                format!("{c}-")
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("refs/include/{}", fixed.join("/"))
 }
 
 pub fn short(sha: &str) -> &str {

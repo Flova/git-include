@@ -3,7 +3,8 @@
 //!
 //! Downloads go through `curl` (the same transport the install script
 //! uses), so no HTTP stack is compiled into the binary. Release assets are
-//! plain executables named `git-include-<target-triple>[.exe]`.
+//! plain executables named `git-include-<target-triple>[.exe]`, verified
+//! against the release's SHA256SUMS file before installation.
 
 #[cfg(feature = "self-update")]
 mod imp {
@@ -48,6 +49,16 @@ mod imp {
         let staging = exe.with_extension("update-tmp");
         let _ = std::fs::remove_file(&staging);
         curl_to_file(&url, &staging).with_context(|| format!("could not download {url}"))?;
+
+        // Verify against the release's checksum manifest before touching
+        // the installed binary.
+        let sums_url = format!("https://github.com/{REPO}/releases/download/{tag}/SHA256SUMS");
+        let sums = curl_stdout(&sums_url)
+            .context("could not download SHA256SUMS to verify the release")?;
+        if let Err(err) = verify_sha256(&staging, &sums, &asset) {
+            let _ = std::fs::remove_file(&staging);
+            return Err(err);
+        }
 
         replace_executable(&exe, &staging)?;
         println!("Updated {} to git-include {latest}.", exe.display());
@@ -98,6 +109,33 @@ mod imp {
         Ok(())
     }
 
+    /// Look up `asset` in a `sha256sum`-formatted manifest.
+    fn expected_hash<'a>(sums: &'a str, asset: &str) -> Option<&'a str> {
+        sums.lines().find_map(|line| {
+            let (hash, name) = line.split_once(char::is_whitespace)?;
+            let name = name.trim().trim_start_matches('*');
+            (name == asset).then_some(hash)
+        })
+    }
+
+    fn verify_sha256(path: &Path, sums: &str, asset: &str) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let expected = expected_hash(sums, asset)
+            .with_context(|| format!("SHA256SUMS has no entry for {asset}"))?;
+        let data = std::fs::read(path)?;
+        let actual: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if !actual.eq_ignore_ascii_case(expected) {
+            bail!(
+                "checksum mismatch for {asset}: expected {expected}, got {actual}.\n\
+                 The download was discarded; try again or verify the release manually."
+            );
+        }
+        Ok(())
+    }
+
     /// Swap the new binary into place. On Unix a rename over the running
     /// executable is fine; on Windows the running image must be renamed away
     /// first.
@@ -135,7 +173,22 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::extract_json_string;
+        use super::{expected_hash, extract_json_string};
+
+        #[test]
+        fn finds_asset_hashes_in_sha256sums() {
+            let sums = "aaaa  git-include-x86_64-unknown-linux-gnu\n\
+                        bbbb *git-include-x86_64-pc-windows-msvc.exe\n";
+            assert_eq!(
+                expected_hash(sums, "git-include-x86_64-unknown-linux-gnu"),
+                Some("aaaa")
+            );
+            assert_eq!(
+                expected_hash(sums, "git-include-x86_64-pc-windows-msvc.exe"),
+                Some("bbbb")
+            );
+            assert_eq!(expected_hash(sums, "other"), None);
+        }
 
         #[test]
         fn extracts_tag_name_from_release_json() {

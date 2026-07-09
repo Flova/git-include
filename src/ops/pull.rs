@@ -30,9 +30,10 @@ pub fn run(git: &Git, subdir: Option<&str>, all: bool, opts: &PullOptions<'_>) -
         }
     };
 
+    let action = if opts.force { "pull --force" } else { "pull" };
     for subdir in &targets {
         let inc = Include::load(git, subdir)?;
-        sync(inc, None, None, "pull", opts)?;
+        sync(inc, None, None, action, opts)?;
     }
     Ok(())
 }
@@ -105,6 +106,7 @@ pub fn sync(
         meta.parent = Some(git.head()?);
     }
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
+    meta.ref_kind_hint = Some(kind);
     let subtree = git.tree_with_blob(&merged_stripped, MARKER_FILE, meta.serialize().as_bytes())?;
 
     if !conflicts.is_empty() {

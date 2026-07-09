@@ -1079,6 +1079,142 @@ fn commit_messages_are_templatable_via_flag_and_config() {
     assert_eq!(subject, "git include pull vendor/lib");
 }
 
+// ------------------------------------------- push to a different branch ----
+
+#[test]
+fn push_to_new_remote_branch_leaves_tracking_untouched() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    commit_file(&host, "vendor/lib/feat.txt", "f\n", "propose a feature");
+
+    let out = include_ok(
+        &host,
+        &["push", "vendor/lib", "--branch", "feature/proposal"],
+    );
+    assert!(out.contains("feature/proposal"), "got: {out}");
+    assert!(out.contains("still tracks 'main'"), "got: {out}");
+
+    // The feature branch exists upstream with our commit; main is untouched.
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "feature/proposal",
+            &url,
+            clone.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(read(&clone, "feat.txt"), "f\n");
+    let log = git_in(&clone, &["log", "--format=%s", "feature/proposal"]);
+    assert!(log.contains("propose a feature"), "log: {log}");
+    assert!(!git_in(&clone, &["ls-tree", "--name-only", "origin/main"]).contains("feat.txt"));
+
+    // No marker bookkeeping happened: the commit still counts as unpushed
+    // relative to the tracked branch (it lands there via the PR merge).
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("1 commit(s) to push"), "got: {s}");
+
+    // The feature branch now sits ahead of the recorded base, so pushing
+    // to it again is refused (it is not at the base anymore).
+    let err = include_err(&host, &["push", "vendor/lib", "-b", "feature/proposal"]);
+    assert!(err.contains("already exists"), "got: {err}");
+}
+
+#[test]
+fn push_to_existing_branch_not_at_base_is_refused() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    git_in(&up_work, &["checkout", "-q", "-b", "other"]);
+    upstream_commit(&up_work, "other.txt", "o\n", "other work");
+    git_in(&up_work, &["checkout", "-q", "main"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--branch", "main"]);
+    commit_file(&host, "vendor/lib/x.txt", "x\n", "local");
+
+    let err = include_err(&host, &["push", "vendor/lib", "--branch", "other"]);
+    assert!(err.contains("already exists"), "got: {err}");
+}
+
+// ------------------------------------------------------ changing remote ----
+
+#[test]
+fn remote_command_shows_and_changes_the_upstream() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Show the current remote.
+    let out = include_ok(&host, &["remote", "vendor/lib"]);
+    assert_eq!(out.trim(), url);
+
+    // Mirror the upstream to a new location and point the include at it.
+    let mirror = env.path("mirror.git");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", "--mirror", &url, mirror.to_str().unwrap()],
+    );
+    let mirror_url = mirror.to_str().unwrap().to_string();
+    include_ok(&host, &["remote", "vendor/lib", &mirror_url]);
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(recorded, mirror_url);
+    assert_clean(&host);
+
+    // Pull and push now go through the new remote.
+    let mirror_work = env.path("mirror-work");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &mirror_url, mirror_work.to_str().unwrap()],
+    );
+    configure_user(&mirror_work);
+    commit_file(&mirror_work, "new.txt", "n\n", "work on the mirror");
+    git_in(&mirror_work, &["push", "-q", "origin", "main"]);
+    include_ok(&host, &["pull", "vendor/lib"]);
+    assert_eq!(read(&host, "vendor/lib/new.txt"), "n\n");
+    // The old upstream never saw that commit.
+    assert!(!up_work.join("new.txt").exists());
+
+    // A remote that lacks the tracked branch is refused.
+    let empty = env.bare_repo("empty.git");
+    let err = include_err(&host, &["remote", "vendor/lib", empty.to_str().unwrap()]);
+    assert!(err.contains("does not exist"), "got: {err}");
+}
+
+// -------------------------------------------------- message ref kinds ----
+
+#[test]
+fn default_commit_message_names_the_ref_kind() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "f.txt", "1\n", "one");
+    git_in(&up_work, &["tag", "v1"]);
+    git_in(&up_work, &["push", "-q", "origin", "v1"]);
+
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib", "--tag", "v1"]);
+    let body = git_in(&host, &["log", "-1", "--format=%B"]);
+    assert!(body.contains("tag: \"v1\""), "body: {body}");
+
+    include_ok(&host, &["switch", "vendor/lib", "main"]);
+    let body = git_in(&host, &["log", "-1", "--format=%B"]);
+    assert!(body.contains("branch: \"main\""), "body: {body}");
+
+    // Flags used are visible in the subject.
+    commit_file(&host, "vendor/lib/junk.txt", "j\n", "junk");
+    include_ok(&host, &["pull", "vendor/lib", "--force"]);
+    let subject = git_in(&host, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, "git include pull --force vendor/lib");
+}
+
 // ------------------------------------------------------- init / export ----
 
 #[test]

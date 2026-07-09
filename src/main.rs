@@ -81,6 +81,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Push {
             subdir,
             dry_run,
+            branch,
             squash,
             message,
             no_lfs,
@@ -89,6 +90,7 @@ fn run(cli: Cli) -> Result<()> {
             let opts = ops::push::PushOptions {
                 dry_run,
                 squash,
+                to_branch: branch.as_deref(),
                 message: message.as_deref(),
                 no_lfs,
             };
@@ -140,6 +142,14 @@ fn run(cli: Cli) -> Result<()> {
         Command::Branches { subdir } => {
             let subdir = repo_relative_subdir(&git, &subdir)?;
             ops::branches::list(&git, &subdir)
+        }
+        Command::Remote {
+            subdir,
+            url,
+            message,
+        } => {
+            let subdir = repo_relative_subdir(&git, &subdir)?;
+            ops::remote::run(&git, &subdir, url.as_deref(), message.as_deref())
         }
         Command::List => ops::list::run(&git),
         Command::Remove { subdir, message } => {

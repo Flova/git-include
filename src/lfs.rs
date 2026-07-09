@@ -17,6 +17,15 @@ use git2::{Oid, TreeWalkMode, TreeWalkResult};
 
 use crate::git::Git;
 
+/// The marker's remote value can come from a repository someone else
+/// authored. libgit2 only speaks real transports, but `git lfs` goes
+/// through git itself, where option-like values or exotic schemes such as
+/// `ext::` can execute commands — so the CLI shell-out is restricted to
+/// ordinary remotes.
+fn remote_safe_for_cli(remote: &str) -> bool {
+    !remote.starts_with('-') && !remote.contains("::")
+}
+
 pub fn lfs_installed() -> bool {
     Command::new("git")
         .args(["lfs", "version"])
@@ -70,6 +79,13 @@ pub fn fetch_and_checkout(git: &Git, remote: &str, commit: &str, subdir: &str, n
     if no_lfs || !tree_uses_lfs(git, commit) {
         return;
     }
+    if !remote_safe_for_cli(remote) {
+        eprintln!(
+            "warning: refusing to pass unusual remote '{remote}' to the git-lfs CLI; \
+             LFS files stay as pointer files."
+        );
+        return;
+    }
     if !lfs_installed() {
         eprintln!(
             "warning: '{subdir}' uses Git LFS but git-lfs is not installed.\n\
@@ -95,6 +111,13 @@ pub fn fetch_and_checkout(git: &Git, remote: &str, commit: &str, subdir: &str, n
 /// references so the server never sees dangling pointers.
 pub fn push_objects(git: &Git, remote: &str, commit: &str, subdir: &str, no_lfs: bool) {
     if no_lfs || !tree_uses_lfs(git, commit) {
+        return;
+    }
+    if !remote_safe_for_cli(remote) {
+        eprintln!(
+            "warning: refusing to pass unusual remote '{remote}' to the git-lfs CLI; \
+             LFS objects were NOT uploaded."
+        );
         return;
     }
     if !lfs_installed() {

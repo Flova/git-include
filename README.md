@@ -87,14 +87,18 @@ operated on.
 $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh | bash
 ```
 
-The script detects your platform, downloads the latest release binary and
-installs it to `~/.local/bin` (or `/usr/local/bin` as root). Pin a version
+The script detects your platform, downloads the latest release binary,
+verifies it against the release's `SHA256SUMS` manifest, and installs it to
+`~/.local/bin` (or `/usr/local/bin` as root). Pin a version
 with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 
 ```console
 $ git include self-update            # or --version vX.Y.Z, or -n to preview
 ```
+
+(Self-update downloads are checksum-verified against the release's
+`SHA256SUMS` before the running binary is replaced.)
 
 (Self-update is only compiled into the binaries git-include distributes
 itself — the curl-installed ones and the Windows MSI. Package-manager
@@ -176,6 +180,9 @@ $ git include diff vendor/widgets              # your changes since last sync
 $ git include diff vendor/widgets --upstream --fetch   # vs. latest upstream
 ```
 
+`diff` output is colorized like `git diff` when writing to a terminal
+(disable with the standard `NO_COLOR` environment variable).
+
 Without `--fetch`, `status` uses the upstream state seen by the most recent
 fetch, so it's instant and works offline.
 
@@ -221,6 +228,17 @@ into one final commit, so the pushed content always matches your tree.
 If upstream moved in the meantime, `push` refuses and asks you to
 `git include pull` first, so upstream never gets surprise merge results.
 
+To propose changes instead of pushing straight to the tracked branch —
+e.g. for an upstream pull request — push them to a **new branch**:
+
+```console
+$ git include push vendor/widgets --branch feature/my-fix
+```
+
+The include keeps tracking its original revision (the marker is not
+touched); once the proposal is merged upstream, a normal `pull` picks it
+up. This also works from an include pinned to a tag or commit.
+
 ### Switch the tracked branch
 
 ```console
@@ -248,6 +266,7 @@ command again. `switch` also accepts a tag or commit id — see
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
 | `git include switch <dir> <branch\|tag\|commit>` | Track a different branch, or pin to a tag/commit, carrying local changes over. |
 | `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
+| `git include remote <dir> [<url>]` | Show — or change — the upstream remote (e.g. after a repo moved, or to use a fork). |
 | `git include list` | List all includes, nested ones indented. |
 | `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
 | `git include completions <shell>` | Print a tab-completion script. |
@@ -300,10 +319,11 @@ $ git include pull vendor/widgets \
 
 | Variable | Value |
 | --- | --- |
-| `{{ action }}` | `add`, `pull`, `switch`, `push`, `init`, or `remove` |
+| `{{ action }}` | the command, including notable flags (e.g. `pull --force`) |
 | `{{ subdir }}` | the included directory |
 | `{{ remote }}` | upstream URL |
 | `{{ ref }}` (alias `{{ branch }}`) | the tracked branch/tag/commit |
+| `{{ ref_kind }}` | `branch`, `tag`, or `commit` |
 | `{{ commit }}` / `{{ short_commit }}` | the upstream commit (full / 7 chars) |
 | `{{ version }}` | the git-include version |
 

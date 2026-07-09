@@ -39,5 +39,10 @@ pub fn switch(git: &Git, subdir: &str, rev: &str, opts: &PullOptions<'_>) -> Res
         println!("'{subdir}' already tracks '{rev}'.");
         return Ok(());
     }
-    sync(inc, Some(rev), None, "switch", opts)
+    let action = if opts.force {
+        "switch --force"
+    } else {
+        "switch"
+    };
+    sync(inc, Some(rev), None, action, opts)
 }

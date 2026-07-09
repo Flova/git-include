@@ -111,6 +111,9 @@ fn is_verbatim_sync_commit(inc: &Include<'_>, commit: &str, stripped_tree: &str)
 pub struct PushOptions<'a> {
     pub dry_run: bool,
     pub squash: bool,
+    /// Push to this (possibly new) branch on the remote instead of the
+    /// tracked one. The marker keeps tracking its original revision.
+    pub to_branch: Option<&'a str>,
     pub message: Option<&'a str>,
     pub no_lfs: bool,
 }
@@ -120,42 +123,80 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
     let inc = Include::load(git, subdir)?;
     git.require_clean_worktree(&format!("push '{subdir}'"))?;
 
-    eprintln!("Fetching {} ({}) ...", inc.meta.remote, inc.meta.branch);
-    let upstream = fetch_upstream_head(&inc)?;
+    let target_branch = opts.to_branch.unwrap_or(&inc.meta.branch).to_string();
+    let elsewhere = target_branch != inc.meta.branch;
 
-    if let Some(upstream) = &upstream {
+    eprintln!("Fetching {} ({}) ...", inc.meta.remote, inc.meta.branch);
+    let upstream = if elsewhere {
+        // Pushing to another (typically new) branch — e.g. a feature branch
+        // for an upstream pull request. The tracked revision is irrelevant
+        // here (and may even be a tag/commit pin); the target branch, if it
+        // already exists, must sit exactly at the recorded base so we never
+        // clobber unrelated work.
+        let refs = git.remote_refs(&inc.meta.remote)?;
+        let target = refs
+            .branches
+            .iter()
+            .find(|(_, n)| *n == target_branch)
+            .map(|(sha, _)| sha.clone());
+        if let Some(sha) = &target
+            && *sha != inc.meta.commit
+        {
+            bail!(
+                "branch '{target_branch}' already exists on {} at {} (not at the recorded \
+                 base {}).\nPick a new branch name, or push to it from a matching state.",
+                inc.meta.remote,
+                short(sha),
+                short(&inc.meta.commit),
+            );
+        }
+        if target.is_none() {
+            eprintln!(
+                "Branch '{target_branch}' does not exist on {} yet; it will be created.",
+                inc.meta.remote
+            );
+        }
+        // Make sure the base commit's objects are available locally.
+        let _ = git.fetch_rev(&inc.meta.remote, &inc.meta.branch, None, &inc.pin_ref());
         inc.ensure_base_commit()?;
-        if *upstream != inc.meta.commit {
-            if git.is_descendant_of(upstream, &inc.meta.commit) {
+        target
+    } else {
+        let upstream = fetch_upstream_head(&inc)?;
+        if let Some(upstream) = &upstream {
+            inc.ensure_base_commit()?;
+            if *upstream != inc.meta.commit {
+                if git.is_descendant_of(upstream, &inc.meta.commit) {
+                    bail!(
+                        "upstream branch '{}' has new commits since the last sync of '{subdir}'.\n\
+                         Run `git include pull {subdir}` first, then push again.",
+                        inc.meta.branch
+                    );
+                }
                 bail!(
-                    "upstream branch '{}' has new commits since the last sync of '{subdir}'.\n\
-                     Run `git include pull {subdir}` first, then push again.",
-                    inc.meta.branch
+                    "upstream branch '{}' has diverged from the commit recorded in \
+                     {subdir}/{MARKER_FILE}\n(recorded {}, upstream is now {}). \
+                     Run `git include pull {subdir}` to reconcile.",
+                    inc.meta.branch,
+                    short(&inc.meta.commit),
+                    short(upstream),
                 );
             }
-            bail!(
-                "upstream branch '{}' has diverged from the commit recorded in \
-                 {subdir}/{MARKER_FILE}\n(recorded {}, upstream is now {}). \
-                 Run `git include pull {subdir}` to reconcile.",
-                inc.meta.branch,
-                short(&inc.meta.commit),
-                short(upstream),
+        } else {
+            // Branch does not exist upstream yet (e.g. right after `init`):
+            // the recorded history itself is what gets published.
+            eprintln!(
+                "Branch '{}' does not exist on {} yet; it will be created.",
+                inc.meta.branch, inc.meta.remote
             );
+            if !git.has_commit(&inc.meta.commit) {
+                bail!(
+                    "the commit recorded in {subdir}/{MARKER_FILE} does not exist locally; \
+                     cannot publish '{subdir}'"
+                );
+            }
         }
-    } else {
-        // Branch does not exist upstream yet (e.g. right after `init`):
-        // the recorded history itself is what gets published.
-        eprintln!(
-            "Branch '{}' does not exist on {} yet; it will be created.",
-            inc.meta.branch, inc.meta.remote
-        );
-        if !git.has_commit(&inc.meta.commit) {
-            bail!(
-                "the commit recorded in {subdir}/{MARKER_FILE} does not exist locally; \
-                 cannot publish '{subdir}'"
-            );
-        }
-    }
+        upstream
+    };
 
     let parent = inc.meta.parent.clone().with_context(|| {
         format!("{subdir}/{MARKER_FILE} has no 'parent' entry; cannot determine local commits")
@@ -245,14 +286,30 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
     }
     if dry_run {
         println!(
-            "dry run: {replayed} commit(s) would be pushed to {} ({}).",
-            inc.meta.remote, inc.meta.branch
+            "dry run: {replayed} commit(s) would be pushed to {} ({target_branch}).",
+            inc.meta.remote
         );
         return Ok(());
     }
 
     lfs::push_objects(git, &inc.meta.remote, &tip, subdir, no_lfs);
-    git.push_commit(&inc.meta.remote, &tip, &inc.meta.branch)?;
+    git.push_commit(&inc.meta.remote, &tip, &target_branch)?;
+
+    if elsewhere {
+        // The include keeps tracking its original revision: no marker or
+        // pin update. The local commits stay "to push" until they reach
+        // the tracked branch (e.g. once the pull request is merged).
+        println!(
+            "Pushed {replayed} commit(s) from '{subdir}' to {} ({target_branch}).",
+            inc.meta.remote
+        );
+        println!(
+            "'{subdir}' still tracks '{}'; pull once the changes land there.",
+            inc.meta.branch
+        );
+        return Ok(());
+    }
+
     git.set_ref(&inc.pin_ref(), &tip)?;
 
     // Record the new upstream position in the marker file (one bookkeeping
