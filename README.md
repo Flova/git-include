@@ -92,12 +92,14 @@ The script detects your platform, downloads the latest release binary,
 verifies it against the release's `SHA256SUMS` manifest, and installs it to
 `~/.local/bin` (or `/usr/local/bin` as root). For Linux, two flavors are
 published and the script picks automatically (override with
-`GIT_INCLUDE_FLAVOR=dynamic|static`):
+`GIT_INCLUDE_FLAVOR=dynamic|portable`):
 
 - `*-linux-gnu` — dynamically linked against your distro's OpenSSL and
   zlib; nothing bundled. Preferred when the system is compatible.
-- `*-linux-musl` — **fully static**, a single ELF that runs on any
-  distribution: old glibc, musl-based, or container images with no libssl.
+- `*-linux-gnu-portable` — OpenSSL and zlib **compiled in**; needs only
+  glibc ≥ 2.28 (2018), so it runs on old distros and slim container
+  images with no libssl. (Musl-based distros like Alpine build from
+  source: `cargo install git-include`.)
 
 macOS binaries use the system Security framework for TLS; OpenSSL is
 compiled in only for SSH support (macOS ships no OpenSSL to link
@@ -536,8 +538,10 @@ $ pixi run -e build conda-build   # build the conda package
 
 A plain `cargo test` works too if you have a matching Rust
 (`rust-toolchain.toml`) and git-lfs installed. Releases are built by CI
-from a `v*` tag; the release workflow can also be dispatched manually as
-a dry run that produces all artifacts without publishing anything.
+from a `v*` tag, entirely with the pixi-pinned toolchain (the `dist`
+environment — no rustup, no system packages); the release workflow can
+also be dispatched manually as a dry run that produces all artifacts
+without publishing anything.
 
 ## License
 

@@ -159,14 +159,16 @@ mod imp {
         Ok(())
     }
 
-    /// The release target triple for this build. Linux ships two flavors
-    /// (dynamic -gnu and static -musl); each updates to its own kind.
+    /// The release asset suffix for this build. Linux ships two flavors —
+    /// dynamic (system OpenSSL) and portable (everything compiled in,
+    /// built with GIT_INCLUDE_PORTABLE=1) — and each updates to its own
+    /// kind.
     fn target_triple() -> Option<&'static str> {
-        let musl = cfg!(target_env = "musl");
+        let portable = option_env!("GIT_INCLUDE_PORTABLE").is_some();
         Some(match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") if musl => "x86_64-unknown-linux-musl",
+            ("linux", "x86_64") if portable => "x86_64-unknown-linux-gnu-portable",
             ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-            ("linux", "aarch64") if musl => "aarch64-unknown-linux-musl",
+            ("linux", "aarch64") if portable => "aarch64-unknown-linux-gnu-portable",
             ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
             // No x86_64 macOS asset is published (Intel runners are too
             // scarce in CI); those builds come from cargo/conda instead.

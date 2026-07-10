@@ -21,75 +21,76 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # All binaries are built with the pixi-pinned toolchain (`dist`
+  # environment in pixi.toml) — no rustup, no apt.
   binaries:
-    name: Binary (${{ matrix.target }})
+    name: Binary (${{ matrix.asset }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Two Linux flavors, the user's choice (install.sh picks
-          # automatically): -gnu links the distro's OpenSSL and zlib
-          # dynamically (preferred, nothing bundled); -musl is fully
-          # static with vendored OpenSSL as the portable last resort.
-          - target: x86_64-unknown-linux-gnu
+          # automatically): plain -gnu links the distro's OpenSSL and
+          # zlib dynamically (preferred, nothing bundled); -portable
+          # compiles OpenSSL and zlib in and needs only glibc >= 2.28.
+          - asset: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            flags: ""
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-            flags: ""
-          - target: x86_64-unknown-linux-musl
+            task: dist-dynamic
+            target: x86_64-unknown-linux-gnu
+          - asset: x86_64-unknown-linux-gnu-portable
             os: ubuntu-latest
-            flags: --features vendored-openssl
-          - target: aarch64-unknown-linux-musl
+            task: dist-portable
+            target: x86_64-unknown-linux-gnu
+          - asset: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            flags: --features vendored-openssl
+            task: dist-dynamic
+            target: aarch64-unknown-linux-gnu
+          - asset: aarch64-unknown-linux-gnu-portable
+            os: ubuntu-24.04-arm
+            task: dist-portable
+            target: aarch64-unknown-linux-gnu
           # macOS: TLS goes through the system Security framework;
           # OpenSSL is compiled in only for libssh2 (SSH support), since
           # macOS ships no OpenSSL to link against. No Intel build —
           # macos-13 runners take forever to schedule; Intel Mac users
           # can `cargo install git-include`.
-          - target: aarch64-apple-darwin
+          - asset: aarch64-apple-darwin
             os: macos-latest
-            flags: --features vendored-openssl
+            task: dist
+            target: aarch64-apple-darwin
           # Windows uses the OS TLS stack; nothing to vendor.
-          - target: x86_64-pc-windows-msvc
+          - asset: x86_64-pc-windows-msvc
             os: windows-latest
-            flags: ""
-          - target: aarch64-pc-windows-msvc
+            task: dist
+            target: x86_64-pc-windows-msvc
+          - asset: aarch64-pc-windows-msvc
             os: windows-11-arm
-            flags: ""
+            task: dist
+            target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
-      - name: Install musl toolchain
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update -q && sudo apt-get install -y -q musl-tools
-      - name: Ensure rustup (the windows-11-arm image ships without Rust)
-        if: matrix.os == 'windows-11-arm'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
-            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
-            .\rustup-init.exe -y --default-toolchain none
-            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
-          }
-      # The toolchain version comes from rust-toolchain.toml; rustup
-      # installs and uses it automatically for commands run in the repo.
-      - run: rustup target add ${{ matrix.target }}
+      - uses: prefix-dev/setup-pixi@v0.9.1
+        with:
+          pixi-version: v0.72.2
+          environments: dist
+          cache: true
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --target ${{ matrix.target }} ${{ matrix.flags }}
+        with:
+          key: ${{ matrix.asset }}
+      - run: pixi run -e dist ${{ matrix.task }}
       - name: Stage asset
         shell: bash
         run: |
           mkdir dist
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/git-include.exe" "dist/git-include-${{ matrix.target }}.exe"
+            cp "target/${{ matrix.target }}/release/git-include.exe" "dist/git-include-${{ matrix.asset }}.exe"
           else
-            cp "target/${{ matrix.target }}/release/git-include" "dist/git-include-${{ matrix.target }}"
+            cp "target/${{ matrix.target }}/release/git-include" "dist/git-include-${{ matrix.asset }}"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: bin-${{ matrix.target }}
+          name: bin-${{ matrix.asset }}
           path: dist/*
           if-no-files-found: error
 
@@ -98,15 +99,21 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.9.1
+        with:
+          pixi-version: v0.72.2
+          environments: dist
+          cache: true
       - uses: Swatinem/rust-cache@v2
-      - run: cargo install cargo-wix --locked
-      - name: Build MSI
+      - run: pixi run -e dist cargo install cargo-wix --locked
+      - name: Compute numeric MSI version
         shell: bash
         run: |
           # MSI ProductVersion must be purely numeric; strip any
           # pre-release suffix (0.1.0-alpha.1 -> 0.1.0).
-          v=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\([0-9.]*\).*/\1/')
-          cargo wix --nocapture --install-version "$v" --output dist/git-include-x86_64.msi
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "MSI_VERSION=${v%%-*}" >> "$GITHUB_ENV"
+      - run: pixi run -e dist dist-msi
       - uses: actions/upload-artifact@v4
         with:
           name: msi

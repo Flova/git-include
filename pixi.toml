@@ -12,19 +12,34 @@
 [workspace]
 name = "git-include"
 channels = ["conda-forge"]
-platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+platforms = [
+    "linux-64",
+    "linux-aarch64",
+    "osx-64",
+    "osx-arm64",
+    "win-64",
+    "win-arm64",
+]
 
 [dependencies]
 rust = "=1.96.1"
-# vendored libgit2 (and openssl-sys on unix) compile C at build time
-c-compiler = "*"
-git = "*"
-git-lfs = "*"
 
 [target.unix.dependencies]
+# vendored libgit2 (and openssl-sys) compile C at build time
+c-compiler = "*"
 pkg-config = "*"
 openssl = "3.*"
 zlib = "*"
+git = "*"
+git-lfs = "*"
+
+# conda-forge's win-arm64 package set is still thin: no c-compiler shim
+# (rustc/cc locate MSVC via Visual Studio anyway) and no git/git-lfs
+# (the CI image ships git). Only win-64 gets the full set.
+[target.win-64.dependencies]
+c-compiler = "*"
+git = "*"
+git-lfs = "*"
 
 [tasks]
 test = "cargo test"
@@ -42,5 +57,38 @@ rattler-build = ">=0.40"
 [feature.build.tasks]
 conda-build = "rattler-build build --recipe conda/recipe.yaml --output-dir dist"
 
+# ---- release binaries (the `dist` environment) --------------------------
+# Everything the release workflow builds with, pinned through pixi. The
+# conda toolchain's old sysroot keeps the glibc floor at 2.28 (matching
+# Rust's own std floor), so the "portable" Linux flavor is simply the
+# same build with OpenSSL vendored in: runs on any 2018+ glibc distro
+# with no system library requirements. (conda-forge has no musl Rust
+# std, so that is the widest a pixi-only toolchain can reach; musl
+# distros build from source.)
+
+[feature.dist.target.unix.dependencies]
+# openssl-src (vendored OpenSSL) builds via perl + make
+perl = "*"
+make = "*"
+
+[feature.dist.target.linux-64.tasks]
+dist-dynamic = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC cargo build --release --target x86_64-unknown-linux-gnu"
+dist-portable = 'GIT_INCLUDE_PORTABLE=1 LIBZ_SYS_STATIC=1 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC cargo build --release --target x86_64-unknown-linux-gnu --features vendored-openssl'
+
+[feature.dist.target.linux-aarch64.tasks]
+dist-dynamic = "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=$CC cargo build --release --target aarch64-unknown-linux-gnu"
+dist-portable = 'GIT_INCLUDE_PORTABLE=1 LIBZ_SYS_STATIC=1 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=$CC cargo build --release --target aarch64-unknown-linux-gnu --features vendored-openssl'
+
+[feature.dist.target.osx-arm64.tasks]
+dist = "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$CC cargo build --release --target aarch64-apple-darwin --features vendored-openssl"
+
+[feature.dist.target.win-64.tasks]
+dist = "cargo build --release --target x86_64-pc-windows-msvc"
+dist-msi = "cargo wix --nocapture --install-version $MSI_VERSION --output dist/git-include-x86_64.msi"
+
+[feature.dist.target.win-arm64.tasks]
+dist = "cargo build --release --target aarch64-pc-windows-msvc"
+
 [environments]
 build = { features = ["build"], no-default-feature = true }
+dist = { features = ["dist"] }
