@@ -130,7 +130,7 @@ pub const DEFAULT_COMMIT_TEMPLATE: &str = "git include {{ action }} {{ subdir }}
      include:\n\
      \x20 subdir: \"{{ subdir }}\"\n\
      \x20 remote: \"{{ remote }}\"\n\
-     \x20 ref: \"{{ ref }}\"\n\
+     \x20 {{ ref_kind }}: \"{{ ref }}\"\n\
      \x20 commit: \"{{ commit }}\"\n\
      git-include-version: {{ version }}";
 
@@ -146,12 +146,24 @@ pub fn commit_message(
     inc_subdir: &str,
     meta: &GitRepoFile,
 ) -> String {
+    // Best-effort kind of the tracked revision for {{ ref_kind }}: exact
+    // when the sync just resolved it (encoded in `action` context by the
+    // callers via meta), otherwise derived from its shape.
+    let ref_kind = if crate::git::looks_like_oid(&meta.branch) {
+        "commit"
+    } else if meta.ref_kind_hint.unwrap_or(crate::git::RevKind::Branch) == crate::git::RevKind::Tag
+    {
+        "tag"
+    } else {
+        "branch"
+    };
     let vars = [
         ("action", action.to_string()),
         ("subdir", inc_subdir.to_string()),
         ("remote", meta.remote.clone()),
         ("ref", meta.branch.clone()),
         ("branch", meta.branch.clone()),
+        ("ref_kind", ref_kind.to_string()),
         ("commit", meta.commit.clone()),
         ("short_commit", crate::util::short(&meta.commit).to_string()),
         ("version", env!("CARGO_PKG_VERSION").to_string()),

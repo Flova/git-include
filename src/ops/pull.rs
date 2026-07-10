@@ -8,6 +8,9 @@ use crate::util::short;
 
 pub struct PullOptions<'a> {
     pub force: bool,
+    /// Pull from this remote instead of the tracked one; the marker is
+    /// retargeted to it (pull always updates the marker).
+    pub remote: Option<&'a str>,
     pub message: Option<&'a str>,
     pub no_lfs: bool,
 }
@@ -30,9 +33,10 @@ pub fn run(git: &Git, subdir: Option<&str>, all: bool, opts: &PullOptions<'_>) -
         }
     };
 
+    let action = if opts.force { "pull --force" } else { "pull" };
     for subdir in &targets {
         let inc = Include::load(git, subdir)?;
-        sync(inc, None, None, "pull", opts)?;
+        sync(inc, None, None, action, opts)?;
     }
     Ok(())
 }
@@ -55,13 +59,15 @@ pub fn sync(
     }
 
     let rev = new_rev.unwrap_or(&inc.meta.branch).to_string();
-    eprintln!("Fetching {} ({rev}) ...", inc.meta.remote);
-    let (upstream, kind) = git.fetch_rev(&inc.meta.remote, &rev, expect, &inc.pin_ref())?;
+    let remote = opts.remote.unwrap_or(&inc.meta.remote).to_string();
+    eprintln!("Fetching {remote} ({rev}) ...");
+    let (upstream, kind) = git.fetch_rev(&remote, &rev, expect, &inc.pin_ref())?;
 
     let upstream_tree = git
         .rev_parse(&format!("{upstream}^{{tree}}"))
         .context("fetched commit has no tree")?;
-    let same_target = upstream == inc.meta.commit && rev == inc.meta.branch;
+    let same_target =
+        upstream == inc.meta.commit && rev == inc.meta.branch && remote == inc.meta.remote;
     if same_target && !opts.force {
         match kind {
             RevKind::Branch => println!("'{}' is already up to date with {rev}.", inc.subdir),
@@ -99,12 +105,14 @@ pub fn sync(
     // later. A force pull discards local changes, so there it DOES
     // advance (nothing local is left to push).
     let mut meta = inc.meta.clone();
+    meta.remote = remote.clone();
     meta.branch = rev.clone();
     meta.commit = upstream.clone();
     if opts.force || meta.parent.is_none() {
         meta.parent = Some(git.head()?);
     }
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
+    meta.ref_kind_hint = Some(kind);
     let subtree = git.tree_with_blob(&merged_stripped, MARKER_FILE, meta.serialize().as_bytes())?;
 
     if !conflicts.is_empty() {
@@ -159,6 +167,9 @@ pub fn sync(
             inc.subdir,
             short(&upstream)
         ),
+    }
+    if remote != inc.meta.remote {
+        println!("'{}' now tracks {remote}.", inc.subdir);
     }
     Ok(())
 }

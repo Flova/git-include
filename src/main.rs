@@ -66,6 +66,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Pull {
             subdir,
             all,
+            remote,
             force,
             message,
             no_lfs,
@@ -73,6 +74,7 @@ fn run(cli: Cli) -> Result<()> {
             let subdir = subdir.map(|s| repo_relative_subdir(&git, &s)).transpose()?;
             let opts = ops::pull::PullOptions {
                 force,
+                remote: remote.as_deref(),
                 message: message.as_deref(),
                 no_lfs,
             };
@@ -81,6 +83,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Push {
             subdir,
             dry_run,
+            branch,
+            remote,
+            keep,
             squash,
             message,
             no_lfs,
@@ -89,6 +94,9 @@ fn run(cli: Cli) -> Result<()> {
             let opts = ops::push::PushOptions {
                 dry_run,
                 squash,
+                to_branch: branch.as_deref(),
+                to_remote: remote.as_deref(),
+                keep,
                 message: message.as_deref(),
                 no_lfs,
             };
@@ -125,6 +133,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Switch {
             subdir,
             rev,
+            remote,
             force,
             message,
             no_lfs,
@@ -132,6 +141,7 @@ fn run(cli: Cli) -> Result<()> {
             let subdir = repo_relative_subdir(&git, &subdir)?;
             let opts = ops::pull::PullOptions {
                 force,
+                remote: remote.as_deref(),
                 message: message.as_deref(),
                 no_lfs,
             };

@@ -96,11 +96,17 @@ jobs:
           merge-multiple: true
       - name: Collect conda packages at top level
         run: find assets -name '*.conda' -exec mv {} assets/ \; || true
+      - name: Generate SHA256SUMS
+        run: |
+          cd assets
+          for f in *; do [ -f "$f" ] && sha256sum "$f"; done > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             assets/git-include-*
             assets/*.conda
+            assets/SHA256SUMS
           generate_release_notes: true
       # Optional: publish the conda package to an anaconda.org channel when
       # a token is configured (Settings -> Secrets -> ANACONDA_API_TOKEN).

@@ -53,8 +53,13 @@ pub enum Command {
         /// Pull every included repository
         #[arg(long, conflicts_with = "subdir")]
         all: bool,
-        /// Discard local changes to the directory and take upstream verbatim
-        #[arg(long)]
+        /// Pull from this remote instead of the tracked one (e.g. a fork);
+        /// the marker is retargeted to it
+        #[arg(short, long, conflicts_with = "all")]
+        remote: Option<String>,
+        /// Discard local changes to the directory and take upstream
+        /// verbatim (alias: --discard)
+        #[arg(long, alias = "discard")]
         force: bool,
         /// Commit message template for the sync commit
         #[arg(short, long)]
@@ -70,6 +75,17 @@ pub enum Command {
         /// Show what would be pushed without pushing
         #[arg(short = 'n', long)]
         dry_run: bool,
+        /// Push to this (possibly new) branch instead of the tracked one
+        #[arg(short, long)]
+        branch: Option<String>,
+        /// Push to this remote instead of the tracked one (e.g. a fork)
+        #[arg(short, long)]
+        remote: Option<String>,
+        /// Keep the marker tracking its current remote/branch instead of
+        /// retargeting it to where the push went (temporary-fork PR flow;
+        /// requires --branch or --remote)
+        #[arg(long)]
+        keep: bool,
         /// Push all local changes as a single squashed commit
         #[arg(long)]
         squash: bool,
@@ -126,8 +142,13 @@ pub enum Command {
         subdir: PathBuf,
         /// Branch to track, or tag/commit to pin to
         rev: String,
+        /// Resolve the revision on (and retarget the marker to) this
+        /// remote instead of the tracked one
+        #[arg(short, long)]
+        remote: Option<String>,
         /// Discard local changes instead of carrying them over
-        #[arg(long)]
+        /// (alias: --discard; default is to keep them via a merge)
+        #[arg(long, alias = "discard")]
         force: bool,
         /// Commit message template for the sync commit
         #[arg(short, long)]

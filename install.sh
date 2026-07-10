@@ -49,15 +49,27 @@ if [ -z "$bin_dir" ]; then
 fi
 mkdir -p "$bin_dir"
 
-# --- download and install --------------------------------------------------
-url="https://github.com/${REPO}/releases/download/${version}/git-include-${target}"
+# --- download, verify, install ----------------------------------------------
+base="https://github.com/${REPO}/releases/download/${version}"
+asset="git-include-${target}"
 say "Downloading git-include ${version} for ${target} ..."
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-curl -fsSL --retry 3 "$url" -o "$tmp" \
-    || fail "download failed: $url"
+tmp=$(mktemp) sums=$(mktemp)
+trap 'rm -f "$tmp" "$sums"' EXIT
+curl -fsSL --retry 3 "${base}/${asset}" -o "$tmp" \
+    || fail "download failed: ${base}/${asset}"
+curl -fsSL --retry 3 "${base}/SHA256SUMS" -o "$sums" \
+    || fail "could not download SHA256SUMS for verification"
+expected=$(awk -v a="$asset" '{ n=$2; sub(/^\*/, "", n) } n == a { print $1 }' "$sums")
+[ -n "$expected" ] || fail "SHA256SUMS has no entry for ${asset}"
+if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$tmp" | awk '{print $1}')
+else
+    actual=$(shasum -a 256 "$tmp" | awk '{print $1}')
+fi
+[ "$expected" = "$actual" ] || fail "checksum mismatch for ${asset} (expected $expected, got $actual)"
 chmod 755 "$tmp"
 mv "$tmp" "${bin_dir}/git-include"
+rm -f "$sums"
 trap - EXIT
 
 say "Installed ${bin_dir}/git-include ($("${bin_dir}/git-include" --version))"

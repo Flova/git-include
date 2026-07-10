@@ -61,10 +61,15 @@ _git_include() {
                 local dir="${COMP_WORDS[3]}"
                 local remote
                 remote=$(git config --file "$dir/.gitrepo" subrepo.remote 2>/dev/null)
-                if [ -n "$remote" ]; then
-                    COMPREPLY=($(compgen -W "$(git ls-remote --heads "$remote" 2>/dev/null \
-                        | sed 's|.*refs/heads/||')" -- "$cur"))
-                fi
+                # Only contact remotes with ordinary transports: a cloned
+                # repository controls this value, and exotic schemes like
+                # ext:: would execute commands via git.
+                case "$remote" in
+                    https://*|http://*|ssh://*|git://*|git@*)
+                        COMPREPLY=($(compgen -W "$(git ls-remote --heads "$remote" 2>/dev/null \
+                            | sed 's|.*refs/heads/||')" -- "$cur"))
+                        ;;
+                esac
             fi
             ;;
         completions)

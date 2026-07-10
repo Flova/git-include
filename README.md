@@ -87,14 +87,18 @@ operated on.
 $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh | bash
 ```
 
-The script detects your platform, downloads the latest release binary and
-installs it to `~/.local/bin` (or `/usr/local/bin` as root). Pin a version
+The script detects your platform, downloads the latest release binary,
+verifies it against the release's `SHA256SUMS` manifest, and installs it to
+`~/.local/bin` (or `/usr/local/bin` as root). Pin a version
 with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 
 ```console
 $ git include self-update            # or --version vX.Y.Z, or -n to preview
 ```
+
+(Self-update downloads are checksum-verified against the release's
+`SHA256SUMS` before the running binary is replaced.)
 
 (Self-update is only compiled into the binaries git-include distributes
 itself — the curl-installed ones and the Windows MSI. Package-manager
@@ -176,6 +180,9 @@ $ git include diff vendor/widgets              # your changes since last sync
 $ git include diff vendor/widgets --upstream --fetch   # vs. latest upstream
 ```
 
+`diff` output is colorized like `git diff` when writing to a terminal
+(disable with the standard `NO_COLOR` environment variable).
+
 Without `--fetch`, `status` uses the upstream state seen by the most recent
 fetch, so it's instant and works offline.
 
@@ -221,6 +228,29 @@ into one final commit, so the pushed content always matches your tree.
 If upstream moved in the meantime, `push` refuses and asks you to
 `git include pull` first, so upstream never gets surprise merge results.
 
+Pushes can also target a **different branch and/or remote** — a feature
+branch, or a fork:
+
+```console
+$ git include push vendor/widgets --branch feature/my-fix
+$ git include push vendor/widgets --remote git@github.com:me/widgets-fork -b pr/fix --keep
+```
+
+By default the include is **retargeted** to where the push went (the
+marker records the new remote/branch, and future pulls follow it). Pass
+`--keep` for the temporary-fork flow: the push happens, but the marker
+keeps tracking the original revision — once the proposal is merged
+upstream, a normal `pull` picks it up. Both work from an include pinned
+to a tag or commit (pass `--branch` to name the target). An existing
+target branch is only accepted at the recorded base, so unrelated work is
+never clobbered.
+
+`pull` and `switch` accept `--remote <url>` as well — pulling always
+retargets the marker to the remote it pulled from. That also makes
+`pull --remote` the way to follow an upstream that moved: pulling from
+the new location retargets the include even when its content is
+unchanged.
+
 ### Switch the tracked branch
 
 ```console
@@ -242,11 +272,11 @@ command again. `switch` also accepts a tag or commit id — see
 | Command | Description |
 | --- | --- |
 | `git include add <remote> <dir> [-b <branch> \| -t <tag> \| --commit <sha>]` | Vendor an upstream repository into `<dir>`, tracking a branch (default: the remote's default branch) or pinned to a tag/commit. |
-| `git include pull [<dir>] [--all] [--force]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes. |
-| `git include push <dir> [-n/--dry-run]` | Replay local commits touching `<dir>` onto the upstream branch and push. |
+| `git include pull [<dir>] [--all] [--force] [-r <url>]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes, `-r` pulls from (and retargets to) another remote. |
+| `git include push <dir> [-n] [-b <branch>] [-r <url>] [--keep] [--squash]` | Replay local commits touching `<dir>` onto the upstream branch and push; `-b`/`-r` push (and retarget) elsewhere, `--keep` keeps the current tracking. |
 | `git include status [<dir>] [-f/--fetch]` | Show sync state: commits available upstream, commits to push, uncommitted edits. |
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
-| `git include switch <dir> <branch\|tag\|commit>` | Track a different branch, or pin to a tag/commit, carrying local changes over. |
+| `git include switch <dir> <branch\|tag\|commit>` `[-r <url>]` | Track a different branch, or pin to a tag/commit, carrying local changes over; `-r` switches the remote too. |
 | `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
 | `git include list` | List all includes, nested ones indented. |
 | `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
@@ -300,10 +330,11 @@ $ git include pull vendor/widgets \
 
 | Variable | Value |
 | --- | --- |
-| `{{ action }}` | `add`, `pull`, `switch`, `push`, `init`, or `remove` |
+| `{{ action }}` | the command, including notable flags (e.g. `pull --force`) |
 | `{{ subdir }}` | the included directory |
 | `{{ remote }}` | upstream URL |
 | `{{ ref }}` (alias `{{ branch }}`) | the tracked branch/tag/commit |
+| `{{ ref_kind }}` | `branch`, `tag`, or `commit` |
 | `{{ commit }}` / `{{ short_commit }}` | the upstream commit (full / 7 chars) |
 | `{{ version }}` | the git-include version |
 
