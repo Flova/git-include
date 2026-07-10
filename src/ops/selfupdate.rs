@@ -168,7 +168,8 @@ mod imp {
             ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
             ("linux", "aarch64") if musl => "aarch64-unknown-linux-musl",
             ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-            ("macos", "x86_64") => "x86_64-apple-darwin",
+            // No x86_64 macOS asset is published (Intel runners are too
+            // scarce in CI); those builds come from cargo/conda instead.
             ("macos", "aarch64") => "aarch64-apple-darwin",
             ("windows", "x86_64") => "x86_64-pc-windows-msvc",
             _ => return None,

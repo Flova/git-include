@@ -123,8 +123,10 @@ it installs `git-include.exe` and puts it on `PATH`. (`self-update` works
 on Windows too.)
 
 **Conda:** every release ships `.conda` packages for linux-64,
-linux-aarch64, osx-64, osx-arm64 and win-64 (see the release assets; the
-recipe lives in `conda/recipe.yaml`). Conda builds are compiled without
+linux-aarch64, osx-arm64 and win-64 (see the release assets; the
+recipe lives in `conda/recipe.yaml`). There are no prebuilt Intel-Mac
+packages or binaries — Intel Mac users install from source with
+`cargo install git-include`. Conda builds are compiled without
 the self-update mechanism — there, updating is conda's job
 (`conda update git-include`), and `git include self-update` says so
 instead of fighting the package manager.

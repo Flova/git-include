@@ -51,6 +51,9 @@ case "$arch" in
     aarch64|arm64) arch_part="aarch64" ;;
     *) fail "unsupported architecture: $arch" ;;
 esac
+if [ "$os_part" = "apple-darwin" ] && [ "$arch_part" = "x86_64" ]; then
+    fail "no prebuilt binary for Intel Macs; install with: cargo install git-include"
+fi
 target="${arch_part}-${os_part}"
 
 # --- resolve version -------------------------------------------------------

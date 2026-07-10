@@ -39,10 +39,9 @@ jobs:
             flags: --features vendored-openssl
           # macOS: TLS goes through the system Security framework;
           # OpenSSL is compiled in only for libssh2 (SSH support), since
-          # macOS ships no OpenSSL to link against.
-          - target: x86_64-apple-darwin
-            os: macos-13
-            flags: --features vendored-openssl
+          # macOS ships no OpenSSL to link against. No Intel build —
+          # macos-13 runners take forever to schedule; Intel Mac users
+          # can `cargo install git-include`.
           - target: aarch64-apple-darwin
             os: macos-latest
             flags: --features vendored-openssl
@@ -96,9 +95,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # No osx-64: macos-13 (Intel) runners take forever to schedule.
           - { platform: linux-64,      os: ubuntu-latest }
           - { platform: linux-aarch64, os: ubuntu-24.04-arm }
-          - { platform: osx-64,        os: macos-13 }
           - { platform: osx-arm64,     os: macos-latest }
           - { platform: win-64,        os: windows-latest }
     steps:
