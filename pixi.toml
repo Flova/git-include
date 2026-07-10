@@ -51,6 +51,13 @@ build = "cargo build --release"
 # the conda/package-manager configuration (self-update disabled)
 check-minimal = "cargo check --no-default-features"
 
+# macOS: the conda openssl is linked via @rpath, but nothing adds the
+# environment's lib dir to the search path at runtime — embed it, or
+# every produced binary (including test binaries) aborts on startup.
+[target.osx.tasks]
+test = 'RUSTFLAGS="-C link-arg=-Wl,-rpath,$CONDA_PREFIX/lib" cargo test'
+build = 'RUSTFLAGS="-C link-arg=-Wl,-rpath,$CONDA_PREFIX/lib" cargo build --release'
+
 [feature.build.dependencies]
 rattler-build = ">=0.40"
 
