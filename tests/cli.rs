@@ -1538,6 +1538,43 @@ fn lfs_content_is_fetched_on_add_and_pull() {
         "expected real LFS content, not a pointer file"
     );
     assert_eq!(content[0], 7u8);
+
+    // Upstream adds another LFS file; pull materializes it too.
+    std::fs::write(up_work.join("more.bin"), vec![8u8; 2048]).unwrap();
+    git_in(&up_work, &["add", "more.bin"]);
+    git_in(&up_work, &["commit", "-q", "-m", "more LFS"]);
+    git_in(&up_work, &["push", "-q", "origin", "main"]);
+    include_ok(&host, &["pull", "vendor/lib"]);
+    let content = std::fs::read(host.join("vendor/lib/more.bin")).unwrap();
+    assert_eq!(content.len(), 2048, "pulled LFS file is still a pointer");
+    assert_eq!(content[0], 8u8);
+
+    // A local LFS file's object is uploaded on push, so upstream never
+    // ends up with a dangling pointer.
+    git_in(&host, &["lfs", "install", "--local"]);
+    std::fs::write(host.join("vendor/lib/local.bin"), vec![9u8; 1024]).unwrap();
+    git_in(&host, &["add", "vendor/lib"]);
+    git_in(&host, &["commit", "-q", "-m", "local LFS file"]);
+    include_ok(&host, &["push", "vendor/lib"]);
+    let lfs_store = std::path::Path::new(&url).join("lfs/objects");
+    assert_eq!(
+        count_files(&lfs_store),
+        3,
+        "upstream LFS store should hold big.bin, more.bin and local.bin"
+    );
+}
+
+fn count_files(dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() { count_files(&p) } else { 1 }
+        })
+        .sum()
 }
 
 fn lfs_available() -> bool {

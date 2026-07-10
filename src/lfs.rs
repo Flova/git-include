@@ -26,6 +26,25 @@ fn remote_safe_for_cli(remote: &str) -> bool {
     !remote.starts_with('-') && !remote.contains("::")
 }
 
+/// git-lfs only speaks real URLs: handed a plain local path (a common
+/// remote form for filesystem repositories), its batch API fails with
+/// "missing protocol". Rewrite such remotes as file:// URLs, which
+/// git-lfs serves through its standalone file adapter.
+fn cli_remote(remote: &str) -> String {
+    let path = std::path::Path::new(remote);
+    if remote.contains("://") || !path.is_dir() {
+        return remote.to_string();
+    }
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut s = abs.to_string_lossy().replace('\\', "/");
+    // Windows canonicalize yields \\?\C:\... — file URLs want /C:/...
+    s = s.trim_start_matches("//?/").to_string();
+    if !s.starts_with('/') {
+        s.insert(0, '/');
+    }
+    format!("file://{s}")
+}
+
 pub fn lfs_installed() -> bool {
     Command::new("git")
         .args(["lfs", "version"])
@@ -95,7 +114,7 @@ pub fn fetch_and_checkout(git: &Git, remote: &str, commit: &str, subdir: &str, n
         return;
     }
     eprintln!("Fetching Git LFS objects for '{subdir}' ...");
-    match run_lfs(git, &["fetch", remote, commit]) {
+    match run_lfs(git, &["fetch", &cli_remote(remote), commit]) {
         Ok(()) => {
             if let Err(err) = run_lfs(git, &["checkout", "--", subdir]) {
                 eprintln!("warning: git lfs checkout failed for '{subdir}': {err}");
@@ -128,7 +147,26 @@ pub fn push_objects(git: &Git, remote: &str, commit: &str, subdir: &str, no_lfs:
         return;
     }
     eprintln!("Pushing Git LFS objects for '{subdir}' ...");
-    if let Err(err) = run_lfs(git, &["push", remote, commit]) {
+    if let Err(err) = run_lfs(git, &["push", &cli_remote(remote), commit]) {
         eprintln!("warning: git lfs push to {remote} failed: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cli_remote;
+
+    #[test]
+    fn urls_and_nonexistent_paths_pass_through() {
+        assert_eq!(cli_remote("https://x/y.git"), "https://x/y.git");
+        assert_eq!(cli_remote("git@host:me/repo.git"), "git@host:me/repo.git");
+        assert_eq!(cli_remote("/does/not/exist"), "/does/not/exist");
+    }
+
+    #[test]
+    fn local_directories_become_file_urls() {
+        let dir = std::env::temp_dir();
+        let url = cli_remote(dir.to_str().unwrap());
+        assert!(url.starts_with("file:///"), "got: {url}");
     }
 }
