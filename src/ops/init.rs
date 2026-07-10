@@ -62,7 +62,8 @@ pub fn run(
         if cur == tip_tree {
             continue;
         }
-        tip = Some(git.replay_commit(&commit, &cur, tip.as_deref())?);
+        let parents: Vec<String> = tip.iter().cloned().collect();
+        tip = Some(git.replay_commit(&commit, &cur, &parents)?);
         tip_tree = cur;
         count += 1;
     }
