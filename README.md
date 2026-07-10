@@ -16,7 +16,8 @@ small marker file. That's the whole model:
   with its original message and author (even commits made before a pull),
   and the marker file never leaks upstream.
 - **git-subrepo compatible.** The marker file is the same `.gitrepo` format.
-  You can adopt a repository that already uses git-subrepo, or hand one back.
+  You can adopt a repository that already uses git-subrepo with zero
+  migration.
 - **Export built in.** `git include init` turns any ordinary directory into
   a new included repository, extracting its full history from your commits —
   ready to push to its own (even empty) repository.
@@ -91,7 +92,7 @@ published and the script picks automatically (override with
 - `*-linux-gnu-portable` — OpenSSL and zlib **compiled in**; needs only
   glibc ≥ 2.28 (2018), so it runs on old distros and slim container
   images with no libssl. (Musl-based distros like Alpine build from
-  source: `cargo install git-include`.)
+  source — see below.)
 
 macOS binaries use the system Security framework for TLS; OpenSSL is
 compiled in only for SSH support (macOS ships no OpenSSL to link
@@ -121,8 +122,7 @@ too, for both architectures.)
 **Conda:** every release ships `.conda` packages for linux-64,
 linux-aarch64, osx-arm64 and win-64 (see the release assets; the
 recipe lives in `conda/recipe.yaml`). There are no prebuilt Intel-Mac
-packages or binaries — Intel Mac users install from source with
-`cargo install git-include`. Conda builds are compiled without
+packages or binaries — Intel Mac users build from source (see below). Conda builds are compiled without
 the self-update mechanism — there, updating is conda's job
 (`conda update git-include`), and `git include self-update` says so
 instead of fighting the package manager.
@@ -131,8 +131,8 @@ instead of fighting the package manager.
 compiled in, so there is no system dependency beyond OpenSSL on Linux):
 
 ```console
-$ cargo install --path .        # from a checkout
-$ cargo install git-include     # once published to crates.io
+$ cargo install --git https://github.com/flova/git-include   # straight from GitHub
+$ cargo install --path .                                     # from a checkout
 ```
 
 The binary is named `git-include`, so git automatically picks it up as a
@@ -372,11 +372,12 @@ Each included directory contains a `.gitrepo` file in git-subrepo's format:
 	cmdver = 0.1.0
 ```
 
-Because the format, keys and semantics match git-subrepo, the two tools are
-interchangeable: git-include operates on directories vendored with
-`git subrepo clone`, and git-subrepo can operate on directories created by
-`git include add`. This also means adopting git-include in an existing
-git-subrepo project requires no migration at all.
+Because the format, keys and semantics match git-subrepo, adopting
+git-include in an existing git-subrepo project requires no migration at
+all: it operates on directories vendored with `git subrepo clone` as-is.
+The reverse direction works for branch-tracking includes, but note that
+git-subrepo has no notion of pinning to a tag or commit — an include
+using those features has no git-subrepo equivalent.
 
 ## Git LFS
 
@@ -509,10 +510,11 @@ hasn't been pushed upstream yet.
 and tell you how to recover.
 
 **Which git version do I need?**
-None at runtime — git-include embeds libgit2 and talks to remotes itself.
-The only optional external dependency is `git-lfs` (with git) for LFS
-content, and your credentials are picked up the standard way (ssh-agent and
-git credential helpers).
+Any — git-include embeds libgit2 and talks to remotes itself, so it works
+independently of the git version installed on the machine. The only
+optional external dependency is `git-lfs` for LFS content, and your
+credentials are picked up the standard way (ssh-agent and git credential
+helpers).
 
 ## Development
 

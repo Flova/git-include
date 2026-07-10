@@ -30,7 +30,7 @@ case "$os" in
         # Auto-detection picks the dynamic one when the system has an
         # OpenSSL 3 and falls back to the portable build otherwise.
         [ -n "$(getconf GNU_LIBC_VERSION 2>/dev/null || true)" ] \
-            || fail "musl-based system detected; no prebuilt binary targets musl. Install with: cargo install git-include"
+            || fail "musl-based system detected; no prebuilt binary targets musl. Build from source: cargo install --git https://github.com/flova/git-include"
         case "${GIT_INCLUDE_FLAVOR:-auto}" in
             dynamic)  os_part="unknown-linux-gnu" ;;
             portable) os_part="unknown-linux-gnu-portable" ;;

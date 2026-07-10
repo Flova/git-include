@@ -8,6 +8,7 @@
 <style>
   :root { --red: #e30613; --ink: #111; --paper: #fff; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { overflow-x: clip; }
   body {
     background: var(--paper); color: var(--ink);
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -27,7 +28,7 @@
   h1 .dot { color: var(--red); }
   .tagline {
     margin-top: 22px; font-size: clamp(17px, 2.6vw, 24px); font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.02em; max-width: 40ch;
+    text-transform: uppercase; letter-spacing: 0.02em; max-width: 42ch;
   }
   .tagline em { font-style: normal; background: var(--red); color: #fff; padding: 0 6px; }
   .stamp {
@@ -47,13 +48,25 @@
 
   /* install / download */
   .install { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  .install > div { min-width: 0; }
   @media (min-width: 760px) { .install { grid-template-columns: 3fr 2fr; } }
+  .cmdbox { position: relative; }
   pre.cmd {
-    border: 3px solid var(--ink); padding: 18px 16px;
-    font-size: 14px; overflow-x: auto; background: var(--ink); color: #fff;
-    position: relative; white-space: pre;
+    border: 3px solid var(--ink); padding: 18px 88px 18px 16px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px; background: var(--ink); color: #fff;
+    white-space: pre-wrap; word-break: break-all;
   }
   pre.cmd .p { color: var(--red); font-weight: 700; user-select: none; }
+  button.copy {
+    position: absolute; top: 0; right: 0;
+    background: var(--red); color: #fff; border: 3px solid var(--ink);
+    border-top: 0; border-right: 0;
+    font: inherit; font-weight: 800; font-size: 12px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 8px 12px; cursor: pointer;
+  }
+  button.copy:active { background: #fff; color: var(--ink); }
   .dl { display: flex; flex-direction: column; gap: 10px; }
   a.button {
     display: block; text-align: center; text-decoration: none;
@@ -75,7 +88,7 @@
   .grid { display: grid; grid-template-columns: 1fr; gap: 0; border: 3px solid var(--ink); }
   @media (min-width: 640px) { .grid { grid-template-columns: 1fr 1fr; } }
   @media (min-width: 920px) { .grid { grid-template-columns: 1fr 1fr 1fr; } }
-  .cell { padding: 20px 18px 24px; border: 1.5px solid var(--ink); }
+  .cell { padding: 20px 18px 24px; border: 1.5px solid var(--ink); min-width: 0; }
   .cell b {
     display: block; font-size: 15px; font-weight: 800;
     text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 8px;
@@ -85,8 +98,8 @@
   .cell p code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
 
   /* diagram */
-  .diagram { border: 3px solid var(--ink); padding: 10px; }
-  .diagram svg { display: block; width: 100%; height: auto; }
+  .diagram { border: 3px solid var(--ink); padding: 10px; min-width: 0; }
+  .diagram svg { display: block; width: 100%; max-width: 100%; height: auto; }
 
   footer { padding: 28px 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
   footer a { color: var(--ink); }
@@ -97,7 +110,7 @@
 <main>
   <header>
     <h1>git-<br>include<span class="dot">.</span></h1>
-    <p class="tagline">Vendor external git repos as <em>plain files</em> — with full two-way sync. No submodules. No merge noise. Collaborators just clone.</p>
+    <p class="tagline">Vendor external git repos as <em>plain files</em> — with full two-way sync. No submodules. Collaborators just clone.</p>
     <span class="stamp" id="stamp">pre-alpha</span>
   </header>
 
@@ -105,12 +118,17 @@
     <h2>Install</h2>
     <div class="install">
       <div>
-        <pre class="cmd" id="cmd"><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh | bash</pre>
+        <div class="cmdbox">
+          <pre class="cmd" id="cmd"><span class="p">$ </span><span id="cmdtext">curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh | bash</span></pre>
+          <button class="copy" id="copybtn" type="button">Copy</button>
+        </div>
       </div>
       <div class="dl">
-        <a class="button" id="dlbtn" href="https://github.com/flova/git-include/releases/latest">Download</a>
+        <a class="button" id="dlbtn" href="https://github.com/flova/git-include/releases/latest">All downloads</a>
+        <p class="note" id="uanote" hidden></p>
         <label for="dlsel">or pick your platform</label>
         <select id="dlsel">
+          <option value="">— releases page —</option>
           <option value="x86_64-unknown-linux-gnu">Linux x86_64 (dynamic)</option>
           <option value="x86_64-unknown-linux-gnu-portable">Linux x86_64 (portable)</option>
           <option value="aarch64-unknown-linux-gnu">Linux ARM64 (dynamic)</option>
@@ -120,7 +138,7 @@
           <option value="x86_64-pc-windows-msvc.exe">Windows x64 (.exe)</option>
           <option value="aarch64-pc-windows-msvc.exe">Windows ARM64 (.exe)</option>
         </select>
-        <p class="note">Checksums in <a href="https://github.com/flova/git-include/releases/latest/download/SHA256SUMS">SHA256SUMS</a>. Conda packages on the <a href="https://github.com/flova/git-include/releases/latest">release page</a>. Intel Mac &amp; Alpine: <span class="mono">cargo install git-include</span>.</p>
+        <p class="note">Every asset is listed in <a href="https://github.com/flova/git-include/releases/latest/download/SHA256SUMS">SHA256SUMS</a>. Conda packages on the <a href="https://github.com/flova/git-include/releases/latest">release page</a>.</p>
       </div>
     </div>
   </section>
@@ -128,10 +146,10 @@
   <section>
     <h2>How it works</h2>
     <div class="diagram">
-      <svg viewBox="0 0 900 320" role="img" aria-label="Diagram: your repository contains the upstream code as plain files plus a .gitrepo marker; pull merges new upstream commits in, push replays your commits upstream as real individual commits.">
+      <svg viewBox="0 0 900 330" role="img" aria-label="Diagram: your repository contains the upstream code as plain files plus a .gitrepo marker; pull merges new upstream commits in, push replays your commits upstream as real individual commits.">
         <g font-family="ui-monospace, SF Mono, Menlo, Consolas, monospace" font-size="15">
           <!-- host repo -->
-          <rect x="20" y="30" width="330" height="260" fill="none" stroke="#111" stroke-width="4"/>
+          <rect x="20" y="30" width="330" height="272" fill="none" stroke="#111" stroke-width="4"/>
           <text x="36" y="62" font-weight="bold" font-family="Helvetica Neue, Helvetica, Arial" font-size="17">YOUR REPO</text>
           <text x="36" y="96">src/</text>
           <text x="36" y="122">Cargo.toml</text>
@@ -140,7 +158,7 @@
           <text x="60" y="194">lib.c</text>
           <text x="60" y="220">parser.c</text>
           <text x="60" y="248" fill="#e30613" font-weight="bold">.gitrepo &#8592; marker</text>
-          <text x="36" y="288" font-size="12" fill="#555">plain files — clone &amp; build, no tooling</text>
+          <text x="36" y="290" font-size="12" fill="#555">plain files — clone &amp; build, no tooling</text>
           <!-- upstream repo -->
           <rect x="640" y="70" width="240" height="180" fill="none" stroke="#111" stroke-width="4"/>
           <text x="656" y="102" font-weight="bold" font-family="Helvetica Neue, Helvetica, Arial" font-size="17">UPSTREAM</text>
@@ -157,7 +175,7 @@
           <line x1="380" y1="210" x2="640" y2="210" stroke="#e30613" stroke-width="4"/>
           <polygon points="640,210 624,202 624,218" fill="#e30613"/>
           <text x="400" y="198" font-family="Helvetica Neue, Helvetica, Arial" font-weight="bold" font-size="14" fill="#e30613">PUSH</text>
-          <text x="400" y="232" font-size="12" fill="#555">your commits replayed 1:1 upstream</text>
+          <text x="400" y="232" font-size="12" fill="#555">commits replayed 1:1</text>
         </g>
       </svg>
     </div>
@@ -167,23 +185,23 @@
     <h2>Features</h2>
     <div class="grid">
       <div class="cell"><b>Clone <i>&amp;</i> go</b>
-        <p>The vendored code is ordinary files in your repository. Collaborators need no tool, no <code>--recursive</code>, no init dance.</p></div>
-      <div class="cell"><b>Real two-way sync</b>
+        <p>The vendored code lives as ordinary files in your repository. You and your collaborators use it like any normal git repo — clone and build, nothing to install.</p></div>
+      <div class="cell"><b>Two-way <i>sync</i></b>
         <p><code>pull</code> merges upstream work into your tree; <code>push</code> rebuilds upstream history — every commit of yours arrives individually, original author and message.</p></div>
+      <div class="cell"><b>Plain git <i>semantics</i></b>
+        <p>Branch, merge, rebase, bisect and revert the including repository as usual — the vendored files ride along like any other content.</p></div>
       <div class="cell"><b>subrepo-<i>compatible</i></b>
-        <p>Same <code>.gitrepo</code> marker format as git-subrepo. Adopt existing projects with zero migration, or hand them back.</p></div>
+        <p>Same <code>.gitrepo</code> marker format as git-subrepo — adopt an existing git-subrepo project with zero migration.</p></div>
       <div class="cell"><b>Pin <i>anything</i></b>
         <p>Track a branch, or pin to a tag or exact commit. <code>switch</code> moves between them in one command, carrying local changes over.</p></div>
       <div class="cell"><b>Status <i>&amp;</i> diff</b>
         <p>See commits behind, commits to push, and full diffs against upstream — offline, from the last fetch.</p></div>
-      <div class="cell"><b>LFS <i>aware</i></b>
-        <p>Detects upstream Git LFS use, fetches real content on pull, uploads objects before push — no dangling pointers.</p></div>
       <div class="cell"><b>Nested <i>includes</i></b>
         <p>Includes can contain includes. Markers travel as content; operate on any level independently.</p></div>
       <div class="cell"><b>Export <i>built-in</i></b>
         <p><code>init</code> turns any directory into a new include, extracting its full history — ready to publish to an empty repo.</p></div>
       <div class="cell"><b>One <i>binary</i></b>
-        <p>Rust + embedded libgit2. No runtime git needed, no temp branches, no hidden state. MSI, conda and a portable Linux build included.</p></div>
+        <p>Rust with libgit2 embedded — independent of your installed git version. No temp branches, no hidden state. MSI, conda and a portable Linux build included.</p></div>
     </div>
   </section>
 
@@ -195,26 +213,31 @@
 <script>
 (function () {
   var base = "https://github.com/flova/git-include/releases/latest/download/";
+  var releases = "https://github.com/flova/git-include/releases/latest";
   var btn = document.getElementById("dlbtn");
   var sel = document.getElementById("dlsel");
 
-  function assetUrl(v) {
-    return base + (v === "msi" ? "git-include-x86_64.msi" : "git-include-" + v);
-  }
-  function label(v) {
-    return "Download — " + sel.querySelector('[value="' + v + '"]').textContent;
-  }
   function apply(v) {
     sel.value = v;
-    btn.href = assetUrl(v);
-    btn.textContent = label(v);
+    if (!v) {
+      btn.href = releases;
+      btn.textContent = "All downloads";
+      return;
+    }
+    btn.href = base + (v === "msi" ? "git-include-x86_64.msi" : "git-include-" + v);
+    btn.textContent = "Download — " + sel.querySelector('[value="' + v + '"]').textContent;
   }
 
   // best-effort user-agent detection; the select is the manual override
   var ua = navigator.userAgent;
   var arm = /aarch64|arm64|ARM64/.test(ua);
-  var guess = "x86_64-unknown-linux-gnu";
-  if (/Windows/.test(ua)) {
+  var guess = "";
+  if (/Android/.test(ua)) {
+    // no Android build — point at the releases page and say why
+    var note = document.getElementById("uanote");
+    note.textContent = "No Android build exists — pick the platform of your other machine below.";
+    note.hidden = false;
+  } else if (/Windows/.test(ua)) {
     guess = arm ? "aarch64-pc-windows-msvc.exe" : "msi";
   } else if (/Mac/.test(ua)) {
     guess = "aarch64-apple-darwin";
@@ -223,6 +246,28 @@
   }
   apply(guess);
   sel.addEventListener("change", function () { apply(sel.value); });
+
+  // copy-to-clipboard for the install one-liner
+  var copy = document.getElementById("copybtn");
+  var cmd = document.getElementById("cmdtext");
+  copy.addEventListener("click", function () {
+    var text = cmd.textContent;
+    function done(ok) {
+      copy.textContent = ok ? "Copied" : "Failed";
+      setTimeout(function () { copy.textContent = "Copy"; }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); },
+        function () { done(false); });
+    } else {
+      var r = document.createRange();
+      r.selectNodeContents(cmd);
+      var s = getSelection();
+      s.removeAllRanges(); s.addRange(r);
+      done(document.execCommand("copy"));
+      s.removeAllRanges();
+    }
+  });
 })();
 </script>
 </body>
