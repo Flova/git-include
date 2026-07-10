@@ -356,7 +356,20 @@ fn push_requires_pull_when_upstream_moved() {
     assert_eq!(read(&clone, "remote.txt"), "r\n");
     let log = git_in(&clone, &["log", "--format=%s", "main"]);
     assert!(log.contains("local change"), "log: {log}");
-    assert!(!log.contains("git include pull"), "log: {log}");
+    // The pull shows up upstream as what it was: a merge of the local
+    // line with the moved upstream — upstream's own commit is a parent,
+    // not something replayed under a new hash.
+    let merge_parents = git_in(&clone, &["log", "--merges", "--format=%p", "main"]);
+    assert_eq!(
+        merge_parents.split_whitespace().count(),
+        2,
+        "the pull must arrive as a two-parent merge, got: {merge_parents}"
+    );
+    let upstream_line = git_in(&clone, &["log", "--format=%s", "main^2"]);
+    assert!(
+        upstream_line.contains("remote change"),
+        "got: {upstream_line}"
+    );
 }
 
 #[test]
@@ -373,9 +386,10 @@ fn push_preserves_individual_commits_across_pulls() {
     upstream_commit(&up_work, "upstream.txt", "u\n", "upstream work");
     include_ok(&host, &["pull", "vendor/lib"]);
 
-    // status counts the pre-pull commits as still unpushed.
+    // status counts the pre-pull commits as still unpushed — plus the
+    // pull itself, which push publishes as a merge with upstream.
     let s = include_ok(&host, &["status", "vendor/lib"]);
-    assert!(s.contains("2 commit(s) to push"), "got: {s}");
+    assert!(s.contains("3 commit(s) to push"), "got: {s}");
 
     include_ok(&host, &["push", "vendor/lib"]);
     let clone = env.path("check");
@@ -387,11 +401,19 @@ fn push_preserves_individual_commits_across_pulls() {
     assert_eq!(read(&clone, "two.txt"), "2\n");
     assert_eq!(read(&clone, "upstream.txt"), "u\n");
     // Both local commits exist individually upstream (new hashes, same
-    // messages); the pull left no trace in upstream history.
+    // messages), sitting on the upstream state they were actually based
+    // on; the pull is a real merge whose second parent is upstream's own
+    // "upstream work" commit.
     let log = git_in(&clone, &["log", "--format=%s", "main"]);
     assert!(log.contains("first local commit"), "log: {log}");
     assert!(log.contains("second local commit"), "log: {log}");
-    assert!(!log.contains("git include"), "log: {log}");
+    let locals = git_in(&clone, &["log", "--format=%s", "main^1"]);
+    assert!(!locals.contains("upstream work"), "got: {locals}");
+    let upstream_line = git_in(&clone, &["log", "--format=%s", "main^2"]);
+    assert!(
+        upstream_line.contains("upstream work"),
+        "got: {upstream_line}"
+    );
     // And afterwards everything is in sync.
     let s = include_ok(&host, &["status", "vendor/lib"]);
     assert!(s.contains("up to date"), "got: {s}");
@@ -1714,4 +1736,151 @@ fn push_ships_nested_marker_changes_upstream() {
     configure_user(&clone);
     let out = include_ok(&clone, &["pull", "vendor/c"]);
     assert!(out.contains("up to date"), "got: {out}");
+}
+
+// ------------------------------------- merged history predating include ----
+
+#[test]
+fn push_skips_merged_history_from_before_the_include() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+
+    // A side branch forks BEFORE the include exists...
+    git_in(&host, &["branch", "old-work"]);
+
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // ...collects a commit whose tree has no vendor/lib at all...
+    git_in(&host, &["checkout", "-q", "old-work"]);
+    commit_file(&host, "unrelated.txt", "u\n", "unrelated old work");
+    git_in(&host, &["checkout", "-q", "main"]);
+    // ...and is merged after the include was added. That commit is now in
+    // parent..HEAD but must not be mistaken for deleting the include.
+    git_in(
+        &host,
+        &["merge", "-q", "--no-ff", "-m", "merge old work", "old-work"],
+    );
+
+    // A real change to the include on top.
+    commit_file(&host, "vendor/lib/new.txt", "n\n", "include change");
+
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("1 commit(s) to push"), "got: {s}");
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 1 commit"), "got: {out}");
+
+    let bare = std::path::Path::new(&url);
+    assert_eq!(git_in(bare, &["show", "main:new.txt"]), "n");
+    let log = git_in(bare, &["log", "--format=%s", "main"]);
+    assert!(!log.contains("unrelated"), "got: {log}");
+    assert!(!log.contains("merge old work"), "got: {log}");
+}
+
+// ------------------------------------------- host topology preservation ----
+
+#[test]
+fn push_preserves_host_branching_and_merges() {
+    // Two concurrent host branches edit the include and are merged. The
+    // rebuilt upstream history is a 1:1 image of the host graph: each
+    // branch's commits stay individual and in order on their own line,
+    // and the join stays a real merge commit — nothing is linearized.
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    git_in(&host, &["checkout", "-q", "-b", "feat-a"]);
+    commit_file(&host, "vendor/lib/a.txt", "a1\n", "A1: add a.txt");
+    commit_file(&host, "vendor/lib/a.txt", "a1\na2\n", "A2: extend a.txt");
+    git_in(&host, &["checkout", "-q", "main"]);
+    git_in(&host, &["checkout", "-q", "-b", "feat-b"]);
+    commit_file(&host, "vendor/lib/b.txt", "b1\n", "B1: add b.txt");
+    git_in(&host, &["checkout", "-q", "main"]);
+    git_in(
+        &host,
+        &["merge", "-q", "--no-ff", "-m", "Merge feat-a", "feat-a"],
+    );
+    git_in(
+        &host,
+        &["merge", "-q", "--no-ff", "-m", "Merge feat-b", "feat-b"],
+    );
+
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 4 commit(s)"), "got: {out}");
+
+    let bare = std::path::Path::new(&url);
+    assert_eq!(git_in(bare, &["show", "main:a.txt"]), "a1\na2");
+    assert_eq!(git_in(bare, &["show", "main:b.txt"]), "b1");
+
+    // All branch commits exist individually...
+    let log = git_in(bare, &["log", "--format=%s", "main"]);
+    for msg in ["A1: add a.txt", "A2: extend a.txt", "B1: add b.txt"] {
+        assert!(log.contains(msg), "log: {log}");
+    }
+    // ...the join of the two edited lines is a real merge commit whose
+    // second parent is exactly the feat-b line (not a by-time shuffle)...
+    let merges = git_in(bare, &["log", "--merges", "--format=%s", "main"]);
+    assert_eq!(merges, "Merge feat-b", "merges: {merges}");
+    let side = git_in(bare, &["log", "--format=%s", "main^2"]);
+    assert!(side.contains("B1: add b.txt"), "side: {side}");
+    assert!(!side.contains("A1"), "side: {side}");
+    // ..."Merge feat-a" collapsed: after mapping, both its parents sit on
+    // the same upstream line, so it degrades to nothing instead of an
+    // empty merge; feat-a's commits carry the first-parent line.
+    let first = git_in(bare, &["log", "--first-parent", "--format=%s", "main"]);
+    assert!(first.contains("A2: extend a.txt"), "first-parent: {first}");
+
+    // The host repo is fully in sync afterwards.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("clean"), "got: {s}");
+}
+
+#[test]
+fn push_maps_conflicting_branch_edits_to_the_host_merge() {
+    // Two branches rewrite the same line; the host merge commit carries
+    // the hand-made resolution. Upstream gets the same picture: both
+    // branch commits verbatim plus a merge commit holding the resolved
+    // content — not a squashed "combined changes" commit.
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    commit_file(&host, "vendor/lib/shared.txt", "base\n", "add shared file");
+
+    git_in(&host, &["checkout", "-q", "-b", "left"]);
+    commit_file(&host, "vendor/lib/shared.txt", "left\n", "left version");
+    git_in(&host, &["checkout", "-q", "main"]);
+    git_in(&host, &["checkout", "-q", "-b", "right"]);
+    commit_file(&host, "vendor/lib/shared.txt", "right\n", "right version");
+    git_in(&host, &["checkout", "-q", "main"]);
+    git_in(
+        &host,
+        &["merge", "-q", "--no-ff", "-m", "Merge left", "left"],
+    );
+    // Merging right conflicts; resolve by hand and commit the merge.
+    let merge = std::process::Command::new("git")
+        .current_dir(&host)
+        .args(["merge", "--no-ff", "-m", "Merge right (resolved)", "right"])
+        .output()
+        .expect("spawn git");
+    assert!(!merge.status.success(), "the merge should conflict");
+    std::fs::write(host.join("vendor/lib/shared.txt"), "resolved\n").unwrap();
+    git_in(&host, &["add", "vendor/lib/shared.txt"]);
+    git_in(&host, &["commit", "-q", "-m", "Merge right (resolved)"]);
+
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 4 commit(s)"), "got: {out}");
+
+    let bare = std::path::Path::new(&url);
+    assert_eq!(git_in(bare, &["show", "main:shared.txt"]), "resolved");
+    let log = git_in(bare, &["log", "--format=%s", "main"]);
+    assert!(log.contains("left version"), "log: {log}");
+    assert!(log.contains("right version"), "log: {log}");
+    let merges = git_in(bare, &["log", "--merges", "--format=%s", "main"]);
+    assert_eq!(merges, "Merge right (resolved)", "merges: {merges}");
+    // The resolution lives in the merge commit itself, exactly as on the
+    // host: each parent line still shows its own version.
+    assert_eq!(git_in(bare, &["show", "main^1:shared.txt"]), "left");
+    assert_eq!(git_in(bare, &["show", "main^2:shared.txt"]), "right");
 }

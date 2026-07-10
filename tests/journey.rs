@@ -67,9 +67,17 @@ fn full_user_journey() {
         log.contains("widgets: fix crash on empty input"),
         "log: {log}"
     );
+    // Our fix sits on the upstream state it was written against, and the
+    // pull arrives as what it was: a merge with upstream's own line.
+    let fix_line = git_in(&lib, &["log", "--format=%s", "main^1"]);
     assert!(
-        !log.contains("git include"),
-        "no sync noise upstream: {log}"
+        fix_line.contains("widgets: fix crash on empty input") && !fix_line.contains("extra"),
+        "got: {fix_line}"
+    );
+    let upstream_line = git_in(&lib, &["log", "--format=%s", "main^2"]);
+    assert!(
+        upstream_line.contains("core: add extra module"),
+        "got: {upstream_line}"
     );
     assert_eq!(read(&lib, "src/core.txt"), "core v1 + our fix\n");
     let s = include_ok(&host, &["status"]);

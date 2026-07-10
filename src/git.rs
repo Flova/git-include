@@ -111,6 +111,12 @@ impl Git {
             .is_some()
     }
 
+    /// Parent commit ids of `oid`, in order (first parent first).
+    pub fn commit_parents(&self, oid: &str) -> Result<Vec<String>> {
+        let commit = self.repo.find_commit(Oid::from_str(oid)?)?;
+        Ok(commit.parent_ids().map(|p| p.to_string()).collect())
+    }
+
     /// Is `descendant` a descendant of `ancestor`?
     pub fn is_descendant_of(&self, descendant: &str, ancestor: &str) -> bool {
         match (Oid::from_str(descendant), Oid::from_str(ancestor)) {
@@ -537,15 +543,11 @@ impl Git {
         Ok(())
     }
 
-    /// Create a commit object with `tree`, an optional parent (None makes a
-    /// root commit), and the author + message of `original` (committer is
-    /// the configured user). No ref moves.
-    pub fn replay_commit(
-        &self,
-        original: &str,
-        tree: &str,
-        parent: Option<&str>,
-    ) -> Result<String> {
+    /// Create a commit object with `tree`, the given parents (an empty
+    /// slice makes a root commit, several make a merge), and the author +
+    /// message of `original` (committer is the configured user). No ref
+    /// moves.
+    pub fn replay_commit(&self, original: &str, tree: &str, parents: &[String]) -> Result<String> {
         let orig = self.repo.find_commit(Oid::from_str(original)?)?;
         let author = orig.author().to_owned();
         let committer = self
@@ -553,14 +555,15 @@ impl Git {
             .signature()
             .context("cannot determine committer; set user.name and user.email in git config")?;
         let tree = self.repo.find_tree(Oid::from_str(tree)?)?;
-        let parent = parent
-            .map(|p| self.repo.find_commit(Oid::from_str(p)?))
-            .transpose()?;
-        let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
+        let mut parent_commits = Vec::with_capacity(parents.len());
+        for p in parents {
+            parent_commits.push(self.repo.find_commit(Oid::from_str(p)?)?);
+        }
+        let parent_refs: Vec<&git2::Commit<'_>> = parent_commits.iter().collect();
         let message = String::from_utf8_lossy(orig.message_bytes()).into_owned();
         let oid = self
             .repo
-            .commit(None, &author, &committer, &message, &tree, &parents)?;
+            .commit(None, &author, &committer, &message, &tree, &parent_refs)?;
         Ok(oid.to_string())
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "git-include"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 rust-version = "1.96"
 description = "A modern git-subrepo alternative: vendor external repositories as plain files with full two-way sync"
@@ -13,6 +13,10 @@ categories = ["command-line-utilities", "development-tools"]
 [[bin]]
 name = "git-include"
 path = "src/main.rs"
+
+# Applies to every target in the package (binary and integration tests).
+[lints.rust]
+unsafe_code = "forbid"
 
 [features]
 default = ["self-update"]

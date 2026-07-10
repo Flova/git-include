@@ -91,6 +91,5 @@ pub fn count_unpushed(inc: &Include<'_>) -> Result<usize> {
         return Ok(0);
     }
     let plan = plan_replay(inc, &inc.meta.commit)?;
-    // A conflicting remainder is pushed as one combined commit.
-    Ok(plan.steps.len() + usize::from(plan.conflict.is_some()))
+    Ok(plan.steps.len())
 }

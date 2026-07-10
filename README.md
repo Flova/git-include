@@ -221,21 +221,23 @@ $ git include push vendor/widgets
 Pushed 2 commit(s) from 'vendor/widgets' to https://github.com/example/widgets (main); upstream is now 9f8e7d6.
 ```
 
-`push` builds a new upstream history: every host commit that changed the
-directory since your changes were last incorporated upstream is
-cherry-picked onto the upstream branch as its own commit — original message,
-original author, but containing only the changes relevant to the directory.
-This works **across pulls**: commits you made before pulling upstream
-changes still arrive upstream individually (the pull itself contributes
-nothing, since its content is already there). The commit hashes necessarily
-differ from your host commits, but the content is preserved exactly. The
-`.gitrepo` marker is stripped automatically and never appears upstream.
+`push` rebuilds the upstream history as a **1:1 image of your host
+commits**: every commit that changed the directory since your changes were
+last incorporated upstream becomes its own upstream commit — original
+message, original author, containing only the directory's files. Branches
+and merges are mirrored exactly as they happened in the host repository
+(a host merge that resolved conflicting branch edits arrives as the same
+merge commit, carrying the same resolution); commits that never touched
+the directory are left out. This works **across pulls**: commits made
+before a pull stay individual commits, based on the upstream state they
+were actually written against, and the pull itself becomes an ordinary
+merge with upstream's own history. The commit hashes necessarily differ
+from your host commits, but content and topology are preserved exactly.
+The `.gitrepo` marker is stripped automatically and never appears
+upstream.
 
 Preview with `git include push -n <dir>`; use `--squash` if you'd rather
-publish everything as a single commit. If a commit cannot be cherry-picked
-cleanly on its own (e.g. its conflict resolution only exists in a later
-merge), push keeps the commits it could replay and combines the remainder
-into one final commit, so the pushed content always matches your tree.
+publish everything as a single commit.
 
 If upstream moved in the meantime, `push` refuses and asks you to
 `git include pull` first, so upstream never gets surprise merge results.
@@ -492,11 +494,15 @@ remotes, no temporary branches. All of it runs in-process through libgit2
   materialized in your working tree with standard conflict markers.
 - `push` first verifies the upstream branch still points at the recorded
   base (so the result is a pure fast-forward upstream, never a surprise
-  merge), then replays each host commit that changed the directory as a new
-  commit on top of the upstream branch — subdirectory tree with the marker
-  stripped, original message and author preserved. Marker-only bookkeeping
-  commits are skipped automatically. Only the include's *own* marker is
-  stripped; nested `.gitrepo` files are content and travel upstream intact.
+  merge), then maps each host commit that changed the directory to an
+  upstream commit — subdirectory tree taken verbatim with the marker
+  stripped, original message and author, and the host parents translated to
+  their upstream images, so branching and merging carry over unchanged.
+  Marker-only bookkeeping commits are skipped automatically, and sync
+  commits map to the upstream commit they took (a pull that merged local
+  work becomes a real merge with upstream). Only the include's *own* marker
+  is stripped; nested `.gitrepo` files are content and travel upstream
+  intact.
 - Fetched upstream heads are pinned under `refs/include/<dir>` so `status`
   and `diff` work offline and fetched objects survive `git gc`.
 
@@ -551,12 +557,11 @@ $ pixi run build              # release binary for your platform
 $ pixi run -e build conda-build   # build the conda package
 ```
 
-A plain `cargo test` works too if you have a matching Rust
-(`rust-toolchain.toml`) and git-lfs installed. Releases are built by CI
-from a `v*` tag, entirely with the pixi-pinned toolchain (the `dist`
-environment — no rustup, no system packages); the release workflow can
-also be dispatched manually as a dry run that produces all artifacts
-without publishing anything.
+There is no separate toolchain setup — development, CI and releases all
+build through pixi. Releases are built by CI from a `v*` tag, entirely
+with the pixi-pinned toolchain (the `dist` environment — no rustup, no
+system packages); the release workflow can also be dispatched manually
+as a dry run that produces all artifacts without publishing anything.
 
 ## License
 

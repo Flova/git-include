@@ -7,8 +7,8 @@
 # Conda builds compile WITHOUT the `self-update` cargo feature: updating a
 # conda-managed binary is conda's job, not the binary's.
 context:
-  # Conda version syntax has no '-': 0.1.0-alpha.1 (Cargo.toml) -> 0.1.0a1.
-  version: "0.1.0a1"
+  # Conda version syntax has no '-': 0.1.0-alpha.2 (Cargo.toml) -> 0.1.0a2.
+  version: "0.1.0a2"
 
 package:
   name: git-include

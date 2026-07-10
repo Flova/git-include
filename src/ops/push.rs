@@ -1,111 +1,211 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 
 use crate::git::{Git, looks_like_oid};
-use crate::gitrepo::MARKER_FILE;
+use crate::gitrepo::{GitRepoFile, MARKER_FILE};
 use crate::lfs;
 use crate::ops::{Include, commit_message};
 use crate::util::short;
 
-/// The rebuilt upstream history a push would create: for every host commit
-/// since the marker's `parent` that changed the included directory, the
-/// subdirectory tree that replaying (cherry-picking) it onto the upstream
-/// tip produces.
+/// The rebuilt upstream history a push would create: a 1:1 image of the
+/// host commits since the marker's `parent`, restricted to the included
+/// directory. Branching and merging are preserved exactly as they happened
+/// on the host; commits that do not touch the directory are pruned.
 pub struct ReplayPlan {
-    /// (host commit, resulting subdirectory tree), oldest first.
+    /// (host commit, its rebuilt upstream commit), oldest first. Pruned
+    /// host commits do not appear.
     pub steps: Vec<(String, String)>,
-    /// Set when a commit could not be replayed cleanly: (commit, files).
-    /// Steps before the conflict are still valid; the remaining changes
-    /// have to be pushed as one combined commit.
-    pub conflict: Option<(String, Vec<String>)>,
+    /// The rebuilt image of host HEAD — what push publishes. Equals the
+    /// recorded upstream commit when there is nothing to push.
+    pub tip: String,
 }
 
-/// Walk every host commit in `parent..HEAD` and cherry-pick its
-/// subdirectory changes onto a growing upstream tip (starting at
-/// `start_commit`, normally the marker's recorded upstream commit).
+/// Map every host commit in `parent..HEAD` to its image in the rebuilt
+/// upstream history: same message and author, the included directory's
+/// tree taken verbatim (marker stripped), and the host parents translated
+/// to their own images — so the host's branch/merge topology carries over
+/// unchanged.
 ///
-/// Each commit contributes the *diff* of the included directory between
-/// its first parent and itself, three-way merged onto the tip. This makes
-/// sync commits (pulls, marker updates) natural no-ops — their changes are
-/// already upstream — so individual local commits survive across pulls.
+/// Pruning keeps the result free of noise: commits that leave the
+/// directory as their parent's image already has it simply reuse that
+/// image (this also collapses merges whose other leg never touched the
+/// directory), and history from before the include existed maps to
+/// nothing at all. Sync commits (pull, switch, push bookkeeping) map to
+/// the upstream commit they took — a pull that merged local work becomes
+/// a real merge with upstream, which is also what keeps the rebuilt
+/// history a fast-forward of the upstream branch.
 pub fn plan_replay(inc: &Include<'_>, start_commit: &str) -> Result<ReplayPlan> {
     let git = inc.git;
     let mut plan = ReplayPlan {
         steps: Vec::new(),
-        conflict: None,
+        tip: start_commit.to_string(),
     };
     let Some(parent) = inc.meta.parent.as_deref() else {
         return Ok(plan);
     };
-    let empty = git.empty_tree()?;
-    let mut tip_tree = git
-        .rev_parse(&format!("{start_commit}^{{tree}}"))
-        .context("replay base commit has no tree")?;
+    let base = replay_base(inc, parent, start_commit);
 
-    for commit in git.walk_range(parent, &git.head()?)? {
-        let Some(cur) = git.tree_at(&commit, &inc.subdir) else {
-            // The directory was deleted in this commit; deleting the whole
-            // upstream project is never what a push should do.
-            bail!(
-                "commit {} removes '{}' entirely; refusing to push a deletion upstream",
-                short(&commit),
-                inc.subdir
-            );
-        };
-        let cur = git.tree_without_entry(&cur, MARKER_FILE)?;
-        let prev = match git.tree_at(&format!("{commit}^"), &inc.subdir) {
-            Some(t) => git.tree_without_entry(&t, MARKER_FILE)?,
-            None => empty.clone(),
-        };
-        if cur == prev {
-            continue; // did not change the included directory
+    // The upstream image of every host commit mapped so far. None: pruned
+    // with nothing upstream to stand in (history predating the include).
+    let mut images: HashMap<String, Option<String>> = HashMap::new();
+    images.insert(parent.to_string(), Some(base.clone()));
+
+    let head = git.head()?;
+    for commit in git.walk_range(parent, &head)? {
+        let host_parents = git.commit_parents(&commit)?;
+        let mut parents: Vec<String> = Vec::new();
+        for p in &host_parents {
+            let image = match images.get(p) {
+                Some(image) => image.clone(),
+                // Not in `parent..HEAD`, so its content is already
+                // upstream: at its own recorded sync point if it has one,
+                // at the replay base otherwise.
+                None => hidden_image(inc, p, &base),
+            };
+            if let Some(image) = image
+                && !parents.contains(&image)
+            {
+                parents.push(image);
+            }
         }
-        if is_verbatim_sync_commit(inc, &commit, &cur) {
-            // A sync commit that took some upstream state verbatim (force
-            // pull, add, clean switch): its diff is real but its content
-            // never represents local work — skip it explicitly.
+        drop_redundant_parents(git, &mut parents);
+
+        let Some(subdir_tree) = git.tree_at(&commit, &inc.subdir) else {
+            // The directory existed in a parent and this commit deletes
+            // it; deleting the whole upstream project is never what a
+            // push should do.
+            if host_parents
+                .iter()
+                .any(|p| git.tree_at(p, &inc.subdir).is_some())
+            {
+                bail!(
+                    "commit {} removes '{}' entirely; refusing to push a deletion upstream",
+                    short(&commit),
+                    inc.subdir
+                );
+            }
+            // History from before the include existed (e.g. a side branch
+            // that forked earlier and was merged in later): nothing of it
+            // can concern the include.
+            images.insert(commit, None);
+            continue;
+        };
+        let tree = git.tree_without_entry(&subdir_tree, MARKER_FILE)?;
+
+        // A commit that moved the marker to another upstream commit is a
+        // sync, and its directory content came from upstream, not from
+        // local work. Taken verbatim it IS that upstream commit; merged
+        // with local changes it becomes a real merge with upstream.
+        if let Some(upstream) = sync_target(inc, &commit, host_parents.first().map(String::as_str))
+        {
+            if git.rev_parse(&format!("{upstream}^{{tree}}")).as_deref() == Some(tree.as_str()) {
+                images.insert(commit, Some(upstream));
+                continue;
+            }
+            if !parents.contains(&upstream) {
+                parents.push(upstream);
+                drop_redundant_parents(git, &mut parents);
+            }
+        }
+
+        // Unchanged against the sole surviving parent: the commit did not
+        // touch the directory (or is a merge that collapsed once the legs
+        // it joined were pruned) — it needs no image of its own.
+        if parents.len() == 1
+            && git
+                .rev_parse(&format!("{}^{{tree}}", parents[0]))
+                .as_deref()
+                == Some(tree.as_str())
+        {
+            images.insert(commit, parents.pop());
             continue;
         }
-        let merged = if prev == tip_tree {
-            cur.clone() // applies verbatim
-        } else {
-            let (merged, conflicts) = git.merge_trees_3way(&prev, &tip_tree, &cur)?;
-            if !conflicts.is_empty() {
-                plan.conflict = Some((commit, conflicts));
-                return Ok(plan);
-            }
-            merged
-        };
-        if merged == tip_tree {
-            continue; // no-op on top of the tip (e.g. pull / sync commits)
-        }
-        tip_tree = merged.clone();
-        plan.steps.push((commit, merged));
+
+        let rebuilt = git.replay_commit(&commit, &tree, &parents)?;
+        images.insert(commit.clone(), Some(rebuilt.clone()));
+        plan.steps.push((commit, rebuilt));
+    }
+
+    if let Some(Some(tip)) = images.get(&head) {
+        plan.tip = tip.clone();
     }
     Ok(plan)
 }
 
-/// Did `commit` update the marker file AND leave the directory content at
-/// exactly the upstream tree its marker records? That combination uniquely
-/// identifies sync commits that took upstream verbatim (force pull, add,
-/// clean switch) — content that must never be replayed as local work.
-fn is_verbatim_sync_commit(inc: &Include<'_>, commit: &str, stripped_tree: &str) -> bool {
+/// The upstream commit the rebuilt history grows from: the one the marker
+/// recorded at the range boundary `parent` — everything up to `parent` is
+/// already upstream at exactly that commit. (Not the *currently* recorded
+/// commit: local commits made before a later pull were based on the older
+/// state, and their images must say so. The pull's own image then merges
+/// the two lines.) Falls back to the current commit when the marker at
+/// `parent` is unreadable or its commit cannot be obtained.
+fn replay_base(inc: &Include<'_>, parent: &str, start_commit: &str) -> String {
     let git = inc.git;
-    let marker_path = format!("{}/{MARKER_FILE}", inc.subdir);
-    let marker_now = git.rev_parse(&format!("{commit}:{marker_path}"));
-    let marker_before = git.rev_parse(&format!("{commit}^:{marker_path}"));
-    if marker_now.is_none() || marker_now == marker_before {
-        return false; // not a sync commit
-    }
-    let Some(recorded) = marker_now
-        .and_then(|blob| git.repo.find_blob(git2::Oid::from_str(&blob).ok()?).ok())
-        .and_then(|blob| {
-            crate::gitrepo::GitRepoFile::parse(&String::from_utf8_lossy(blob.content())).ok()
-        })
-        .map(|meta| meta.commit)
-    else {
-        return false;
+    let Some(meta) = marker_meta_at(inc, parent) else {
+        return start_commit.to_string();
     };
-    git.rev_parse(&format!("{recorded}^{{tree}}")).as_deref() == Some(stripped_tree)
+    if !git.has_commit(&meta.commit) {
+        git.try_fetch_commit(&inc.meta.remote, &meta.commit);
+    }
+    if git.has_commit(&meta.commit) {
+        meta.commit
+    } else {
+        start_commit.to_string()
+    }
+}
+
+/// Upstream image of a commit outside `parent..HEAD` (an ancestor of
+/// `parent`, so already upstream): its own recorded sync point when its
+/// marker names one that exists locally, the replay base otherwise. None
+/// for commits from before the include existed.
+fn hidden_image(inc: &Include<'_>, commit: &str, base: &str) -> Option<String> {
+    let git = inc.git;
+    git.tree_at(commit, &inc.subdir)?;
+    match marker_meta_at(inc, commit) {
+        Some(meta) if git.has_commit(&meta.commit) => Some(meta.commit),
+        _ => Some(base.to_string()),
+    }
+}
+
+/// The upstream commit a sync commit took: Some when `commit` moved the
+/// marker's recorded commit (pull, switch, push bookkeeping) and that
+/// commit is obtainable locally.
+fn sync_target(inc: &Include<'_>, commit: &str, first_parent: Option<&str>) -> Option<String> {
+    let git = inc.git;
+    let now = marker_meta_at(inc, commit)?;
+    if first_parent
+        .and_then(|p| marker_meta_at(inc, p))
+        .is_some_and(|before| before.commit == now.commit)
+    {
+        return None; // the marker did not move
+    }
+    if !git.has_commit(&now.commit) {
+        git.try_fetch_commit(&inc.meta.remote, &now.commit);
+    }
+    git.has_commit(&now.commit).then_some(now.commit)
+}
+
+/// Parse the marker file as recorded in `rev`, if present and readable.
+fn marker_meta_at(inc: &Include<'_>, rev: &str) -> Option<GitRepoFile> {
+    let git = inc.git;
+    let blob = git.rev_parse(&format!("{rev}:{}/{MARKER_FILE}", inc.subdir))?;
+    let blob = git.repo.find_blob(git2::Oid::from_str(&blob).ok()?).ok()?;
+    GitRepoFile::parse(&String::from_utf8_lossy(blob.content())).ok()
+}
+
+/// Drop parents that are ancestors of another parent: merges whose other
+/// leg was pruned (or was already upstream) degrade to ordinary commits
+/// instead of degenerate merges.
+fn drop_redundant_parents(git: &Git, parents: &mut Vec<String>) {
+    if parents.len() < 2 {
+        return;
+    }
+    let all = parents.clone();
+    parents.retain(|p| {
+        !all.iter()
+            .any(|other| other != p && git.is_descendant_of(other, p))
+    });
 }
 
 pub struct PushOptions<'a> {
@@ -256,46 +356,34 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
             replayed = 1;
         }
     } else {
-        for (commit, tree) in &plan.steps {
-            if dry_run {
+        // The plan already built the rebuilt history (cheap unreferenced
+        // objects, gc-able — a dry run builds them too, identical to a
+        // real push); this only publishes its head.
+        if dry_run {
+            for (commit, _) in &plan.steps {
                 println!(
                     "would push: {} {}",
                     short(commit),
                     git.commit_summary(commit)
                 );
             }
-            // Replay commits are cheap unreferenced objects (gc-able), so a
-            // dry run builds them too — identical logic to a real push.
-            tip = git.replay_commit(commit, tree, Some(&tip))?;
-            replayed += 1;
         }
-        // Whatever could not be expressed as individual replays (a commit
-        // that conflicts when cherry-picked alone — e.g. its resolution
-        // only exists in a later merge — or residual drift) goes into one
-        // final commit with the exact current content.
+        tip = plan.tip.clone();
+        replayed = if tip == inc.meta.commit {
+            0
+        } else {
+            plan.steps.len()
+        };
+        // Safety net: by construction the rebuilt head carries exactly the
+        // current directory content; reconcile any drift in one commit.
         let tip_tree = git
             .rev_parse(&format!("{tip}^{{tree}}"))
             .context("replay tip has no tree")?;
         if local != tip_tree {
-            let msg = match &plan.conflict {
-                Some((commit, _)) => {
-                    eprintln!(
-                        "note: commit {} does not replay cleanly on its own; \
-                         combining the remaining changes into one commit.",
-                        short(commit)
-                    );
-                    format!(
-                        "git include push {subdir}\n\nCombined local changes \
-                         (starting at {} \"{}\", which conflicts when replayed alone).",
-                        short(commit),
-                        git.commit_summary(commit)
-                    )
-                }
-                None => format!("git include push {subdir}\n\nReconcile local content."),
-            };
             if dry_run {
                 println!("would push: 1 combined commit for the remaining changes");
             }
+            let msg = format!("git include push {subdir}\n\nReconcile local content.");
             tip = git.new_commit(&local, &tip, &msg)?;
             replayed += 1;
         }
