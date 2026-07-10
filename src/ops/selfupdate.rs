@@ -172,6 +172,7 @@ mod imp {
             // scarce in CI); those builds come from cargo/conda instead.
             ("macos", "aarch64") => "aarch64-apple-darwin",
             ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+            ("windows", "aarch64") => "aarch64-pc-windows-msvc",
             _ => return None,
         })
     }

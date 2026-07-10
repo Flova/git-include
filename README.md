@@ -117,10 +117,12 @@ $ git include self-update            # or --version vX.Y.Z, or -n to preview
 itself — the curl-installed ones and the Windows MSI. Package-manager
 builds like conda disable it via a cargo feature flag.)
 
-**Windows:** download the MSI installer from the
+**Windows:** download the MSI installer (x64) from the
 [latest release](https://github.com/flova/git-include/releases/latest) —
-it installs `git-include.exe` and puts it on `PATH`. (`self-update` works
-on Windows too.)
+it installs `git-include.exe` and puts it on `PATH`. On ARM64 Windows,
+grab `git-include-aarch64-pc-windows-msvc.exe` from the release assets
+instead and place it on your `PATH`. (`self-update` works on Windows
+too, for both architectures.)
 
 **Conda:** every release ships `.conda` packages for linux-64,
 linux-aarch64, osx-arm64 and win-64 (see the release assets; the

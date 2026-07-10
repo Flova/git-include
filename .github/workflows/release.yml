@@ -49,11 +49,23 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             flags: ""
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            flags: ""
     steps:
       - uses: actions/checkout@v4
       - name: Install musl toolchain
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+      - name: Ensure rustup (the windows-11-arm image ships without Rust)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
+            .\rustup-init.exe -y --default-toolchain none
+            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          }
       # The toolchain version comes from rust-toolchain.toml; rustup
       # installs and uses it automatically for commands run in the repo.
       - run: rustup target add ${{ matrix.target }}
