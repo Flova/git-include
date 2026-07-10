@@ -3,9 +3,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # Dry run: builds every artifact and the SHA256SUMS manifest as workflow
-  # artifacts, but publishes no GitHub release and uploads nothing.
+  # Without a tag input: a dry run that builds every artifact and the
+  # SHA256SUMS manifest as workflow artifacts but publishes nothing.
+  # With one: a full release — the tag is created (on the default
+  # branch's head) together with the GitHub release.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.1.0). Empty = dry run."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -163,8 +170,9 @@ jobs:
           name: SHA256SUMS
           path: assets/SHA256SUMS
       - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.tag != ''
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
           files: |
             assets/git-include-*
             assets/*.conda
@@ -173,7 +181,7 @@ jobs:
       # Optional: publish the conda package to an anaconda.org channel when
       # a token is configured (Settings -> Secrets -> ANACONDA_API_TOKEN).
       - name: Upload to anaconda.org
-        if: ${{ github.ref_type == 'tag' && env.ANACONDA_API_TOKEN != '' }}
+        if: ${{ (github.ref_type == 'tag' || inputs.tag != '') && env.ANACONDA_API_TOKEN != '' }}
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
         run: |
