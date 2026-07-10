@@ -49,6 +49,7 @@ $ git include push vendor/widgets      # contribute your changes back
 - [Handling merge conflicts](#handling-merge-conflicts)
 - [How it works](#how-it-works)
 - [FAQ](#faq)
+- [Development](#development)
 
 ---
 
@@ -89,7 +90,12 @@ $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh
 
 The script detects your platform, downloads the latest release binary,
 verifies it against the release's `SHA256SUMS` manifest, and installs it to
-`~/.local/bin` (or `/usr/local/bin` as root). Pin a version
+`~/.local/bin` (or `/usr/local/bin` as root). The Linux binaries are
+**fully static** (musl, with OpenSSL and libgit2 compiled in): a single
+ELF that runs on any distribution — old glibc, musl-based, or container
+images with no libssl. You can also just grab the binary for your platform
+from the [releases page](https://github.com/flova/git-include/releases)
+directly. Pin a version
 with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 
@@ -502,6 +508,25 @@ None at runtime — git-include embeds libgit2 and talks to remotes itself.
 The only optional external dependency is `git-lfs` (with git) for LFS
 content, and your credentials are picked up the standard way (ssh-agent and
 git credential helpers).
+
+## Development
+
+The development and release environment is pinned with
+[pixi](https://pixi.sh) — one command gets you the exact Rust toolchain,
+git-lfs, C compiler and rattler-build the project is built and tested
+with (versions locked in `pixi.lock`):
+
+```console
+$ pixi run test               # full test suite, LFS round-trip included
+$ pixi run lint               # rustfmt + clippy, exactly as CI runs them
+$ pixi run build              # release binary for your platform
+$ pixi run -e build conda-build   # build the conda package
+```
+
+A plain `cargo test` works too if you have a matching Rust
+(`rust-toolchain.toml`) and git-lfs installed. Releases are built by CI
+from a `v*` tag; the release workflow can also be dispatched manually as
+a dry run that produces all artifacts without publishing anything.
 
 ## License
 

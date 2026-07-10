@@ -162,8 +162,8 @@ mod imp {
     /// The release target triple for this build.
     fn target_triple() -> Option<&'static str> {
         Some(match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-            ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+            ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+            ("linux", "aarch64") => "aarch64-unknown-linux-musl",
             ("macos", "x86_64") => "x86_64-apple-darwin",
             ("macos", "aarch64") => "aarch64-apple-darwin",
             ("windows", "x86_64") => "x86_64-pc-windows-msvc",

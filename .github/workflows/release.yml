@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Dry run: builds every artifact and the SHA256SUMS manifest as workflow
+  # artifacts, but publishes no GitHub release and uploads nothing.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,18 +21,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
-          - { target: x86_64-apple-darwin,       os: macos-13 }
-          - { target: aarch64-apple-darwin,      os: macos-latest }
-          - { target: x86_64-pc-windows-msvc,    os: windows-latest }
+          # Linux download binaries are fully static (musl + vendored
+          # OpenSSL + vendored libgit2): a single ELF that runs on any
+          # distro, regardless of glibc or libssl version.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: --features vendored-openssl
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            flags: --features vendored-openssl
+          # macOS binaries vendor OpenSSL too, so they don't depend on a
+          # Homebrew libssl being present.
+          - target: x86_64-apple-darwin
+            os: macos-13
+            flags: --features vendored-openssl
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            flags: --features vendored-openssl
+          # Windows uses the OS TLS stack; nothing to vendor.
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            flags: ""
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+      # The toolchain version comes from rust-toolchain.toml; rustup
+      # installs and uses it automatically for commands run in the repo.
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }} ${{ matrix.flags }}
       - name: Stage asset
         shell: bash
         run: |
@@ -50,7 +72,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-wix --locked
       - run: cargo wix --nocapture --output dist/git-include-x86_64.msi
@@ -74,11 +95,20 @@ jobs:
           - { platform: win-64,        os: windows-latest }
     steps:
       - uses: actions/checkout@v4
-      - uses: prefix-dev/rattler-build-action@v0.2.34
-        with:
-          recipe-path: conda/recipe.yaml
-          upload-artifact: false
-          build-args: --output-dir dist --target-platform ${{ matrix.platform }}
+      - name: Install pixi (pinned rattler-build)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.72.2 bash
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+      - name: Install pixi (pinned rattler-build)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PIXI_VERSION = "v0.72.2"
+          iwr -useb https://pixi.sh/install.ps1 | iex
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.pixi\bin"
+      - name: Build conda package
+        run: pixi run -e build conda-build --target-platform ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4
         with:
           name: conda-${{ matrix.platform }}
@@ -86,7 +116,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish GitHub release
+    name: Collect artifacts & publish
     needs: [binaries, msi, conda]
     runs-on: ubuntu-latest
     steps:
@@ -101,7 +131,14 @@ jobs:
           cd assets
           for f in *; do [ -f "$f" ] && sha256sum "$f"; done > SHA256SUMS
           cat SHA256SUMS
+      # On a dry run (workflow_dispatch) the manifest plus all artifacts
+      # stay inspectable as workflow artifacts; nothing is published.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: assets/SHA256SUMS
       - uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
         with:
           files: |
             assets/git-include-*
@@ -111,7 +148,7 @@ jobs:
       # Optional: publish the conda package to an anaconda.org channel when
       # a token is configured (Settings -> Secrets -> ANACONDA_API_TOKEN).
       - name: Upload to anaconda.org
-        if: ${{ env.ANACONDA_API_TOKEN != '' }}
+        if: ${{ github.ref_type == 'tag' && env.ANACONDA_API_TOKEN != '' }}
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
         run: |

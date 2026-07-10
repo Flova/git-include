@@ -19,7 +19,7 @@ command -v curl >/dev/null 2>&1 || fail "curl is required"
 os=$(uname -s)
 arch=$(uname -m)
 case "$os" in
-    Linux)  os_part="unknown-linux-gnu" ;;
+    Linux)  os_part="unknown-linux-musl" ;;  # fully static, runs on any distro
     Darwin) os_part="apple-darwin" ;;
     *) fail "unsupported OS: $os (on Windows, use the MSI installer instead)" ;;
 esac
