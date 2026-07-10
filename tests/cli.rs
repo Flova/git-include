@@ -1271,27 +1271,25 @@ fn push_to_existing_branch_not_at_base_is_refused() {
     assert!(err.contains("already exists"), "got: {err}");
 }
 
-// ------------------------------------------------------ changing remote ----
+// ------------------------------------------------- retarget via pull -r ----
 
 #[test]
-fn remote_command_shows_and_changes_the_upstream() {
+fn pull_from_a_mirror_retargets_the_include() {
     let env = TestEnv::new();
     let (url, up_work) = env.upstream("lib");
     let host = env.work_repo("host");
     include_ok(&host, &["add", &url, "vendor/lib"]);
 
-    // Show the current remote.
-    let out = include_ok(&host, &["remote", "vendor/lib"]);
-    assert_eq!(out.trim(), url);
-
-    // Mirror the upstream to a new location and point the include at it.
+    // Mirror the upstream to a new location and pull from it: even though
+    // the head is identical, the marker is retargeted to the mirror.
     let mirror = env.path("mirror.git");
     git_in(
         env.root.path(),
         &["clone", "-q", "--mirror", &url, mirror.to_str().unwrap()],
     );
     let mirror_url = mirror.to_str().unwrap().to_string();
-    include_ok(&host, &["remote", "vendor/lib", &mirror_url]);
+    let out = include_ok(&host, &["pull", "vendor/lib", "--remote", &mirror_url]);
+    assert!(out.contains("now tracks"), "got: {out}");
     let recorded = git_in(
         &host,
         &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
@@ -1313,10 +1311,19 @@ fn remote_command_shows_and_changes_the_upstream() {
     // The old upstream never saw that commit.
     assert!(!up_work.join("new.txt").exists());
 
-    // A remote that lacks the tracked branch is refused.
+    // A remote that lacks the tracked branch is refused, and the marker
+    // keeps pointing at the mirror.
     let empty = env.bare_repo("empty.git");
-    let err = include_err(&host, &["remote", "vendor/lib", empty.to_str().unwrap()]);
-    assert!(err.contains("does not exist"), "got: {err}");
+    let err = include_err(
+        &host,
+        &["pull", "vendor/lib", "--remote", empty.to_str().unwrap()],
+    );
+    assert!(err.contains("is not a branch"), "got: {err}");
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(recorded, mirror_url);
 }
 
 // -------------------------------------------------- message ref kinds ----

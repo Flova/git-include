@@ -162,16 +162,6 @@ pub enum Command {
         /// Included directory
         subdir: PathBuf,
     },
-    /// Show or change the upstream remote of an included directory
-    Remote {
-        /// Included directory
-        subdir: PathBuf,
-        /// New remote URL (omit to print the current one)
-        url: Option<String>,
-        /// Commit message template for the sync commit
-        #[arg(short, long)]
-        message: Option<String>,
-    },
     /// List all included repositories (including nested ones)
     List,
     /// Remove an included directory (upstream is untouched)

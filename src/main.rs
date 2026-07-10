@@ -151,14 +151,6 @@ fn run(cli: Cli) -> Result<()> {
             let subdir = repo_relative_subdir(&git, &subdir)?;
             ops::branches::list(&git, &subdir)
         }
-        Command::Remote {
-            subdir,
-            url,
-            message,
-        } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::remote::run(&git, &subdir, url.as_deref(), message.as_deref())
-        }
         Command::List => ops::list::run(&git),
         Command::Remove { subdir, message } => {
             let subdir = repo_relative_subdir(&git, &subdir)?;

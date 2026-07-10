@@ -51,7 +51,7 @@ _git_include() {
     }
 
     case "$sub" in
-        pull|push|status|diff|branches|remote|remove)
+        pull|push|status|diff|branches|remove)
             COMPREPLY=($(compgen -W "$(__git_include_dirs)" -- "$cur"))
             ;;
         switch)
@@ -94,8 +94,8 @@ const FISH_GIT_SUBCOMMAND_SHIM: &str = r#"
 function __fish_git_include_dirs
     git ls-files -- '*.gitrepo' 2>/dev/null | string replace -r '/\.gitrepo$' ''
 end
-complete -c git -n '__fish_seen_subcommand_from include; and not __fish_seen_subcommand_from add init pull push status diff switch branches list remote remove completions self-update' \
-    -a 'add init pull push status diff switch branches list remote remove completions self-update'
-complete -c git -n '__fish_seen_subcommand_from include; and __fish_seen_subcommand_from pull push status diff switch branches remote remove' \
+complete -c git -n '__fish_seen_subcommand_from include; and not __fish_seen_subcommand_from add init pull push status diff switch branches list remove completions self-update' \
+    -a 'add init pull push status diff switch branches list remove completions self-update'
+complete -c git -n '__fish_seen_subcommand_from include; and __fish_seen_subcommand_from pull push status diff switch branches remove' \
     -a '(__fish_git_include_dirs)'
 "#;

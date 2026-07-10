@@ -307,7 +307,7 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
                 "'{subdir}' has no local changes to push to {target_remote} ({target_branch})."
             );
             println!(
-                "To only retarget the include, use `git include remote` or \
+                "To only retarget the include, use `git include pull --remote` or \
                  `git include switch`."
             );
         } else {

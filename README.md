@@ -246,7 +246,10 @@ target branch is only accepted at the recorded base, so unrelated work is
 never clobbered.
 
 `pull` and `switch` accept `--remote <url>` as well — pulling always
-retargets the marker to the remote it pulled from.
+retargets the marker to the remote it pulled from. That also makes
+`pull --remote` the way to follow an upstream that moved: pulling from
+the new location retargets the include even when its content is
+unchanged.
 
 ### Switch the tracked branch
 
@@ -270,12 +273,11 @@ command again. `switch` also accepts a tag or commit id — see
 | --- | --- |
 | `git include add <remote> <dir> [-b <branch> \| -t <tag> \| --commit <sha>]` | Vendor an upstream repository into `<dir>`, tracking a branch (default: the remote's default branch) or pinned to a tag/commit. |
 | `git include pull [<dir>] [--all] [--force] [-r <url>]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes, `-r` pulls from (and retargets to) another remote. |
-| `git include push <dir> [-n/--dry-run]` | Replay local commits touching `<dir>` onto the upstream branch and push. |
+| `git include push <dir> [-n] [-b <branch>] [-r <url>] [--keep] [--squash]` | Replay local commits touching `<dir>` onto the upstream branch and push; `-b`/`-r` push (and retarget) elsewhere, `--keep` keeps the current tracking. |
 | `git include status [<dir>] [-f/--fetch]` | Show sync state: commits available upstream, commits to push, uncommitted edits. |
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
 | `git include switch <dir> <branch\|tag\|commit>` `[-r <url>]` | Track a different branch, or pin to a tag/commit, carrying local changes over; `-r` switches the remote too. |
 | `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
-| `git include remote <dir> [<url>]` | Show — or change — the upstream remote (e.g. after a repo moved, or to use a fork). |
 | `git include list` | List all includes, nested ones indented. |
 | `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
 | `git include completions <shell>` | Print a tab-completion script. |
