@@ -35,8 +35,11 @@ case "$os" in
             dynamic)  os_part="unknown-linux-gnu" ;;
             portable) os_part="unknown-linux-gnu-portable" ;;
             auto)
-                if command -v ldconfig >/dev/null 2>&1 \
-                    && ldconfig -p 2>/dev/null | grep -q 'libssl\.so\.3'; then
+                # ldconfig lives in /sbin, which non-root PATHs often lack
+                ldconfig=$(command -v ldconfig || command -v /sbin/ldconfig \
+                    || command -v /usr/sbin/ldconfig || true)
+                if [ -n "$ldconfig" ] \
+                    && "$ldconfig" -p 2>/dev/null | grep -q 'libssl\.so\.3'; then
                     os_part="unknown-linux-gnu"
                 else
                     say "note: no system OpenSSL 3 detected; using the portable build"
