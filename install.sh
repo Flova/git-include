@@ -7,8 +7,9 @@
 #   GIT_INCLUDE_BIN_DIR   install directory (default: ~/.local/bin, or
 #                         /usr/local/bin when run as root)
 #   GIT_INCLUDE_FLAVOR    Linux only: 'dynamic' (links your distro's
-#                         OpenSSL; preferred) or 'static' (fully static
-#                         musl build, runs on any distro). Default: auto.
+#                         OpenSSL; preferred) or 'portable' (OpenSSL and
+#                         zlib compiled in; runs on any glibc >= 2.28
+#                         distro). Default: auto.
 set -euo pipefail
 
 REPO="flova/git-include"
@@ -24,23 +25,28 @@ arch=$(uname -m)
 case "$os" in
     Linux)
         # Two flavors are published: -gnu (dynamically linked against the
-        # system's glibc and OpenSSL; preferred) and -musl (fully static;
-        # runs anywhere). Auto-detection picks -gnu when the system looks
-        # compatible and falls back to the static build otherwise.
+        # system's glibc and OpenSSL; preferred) and -gnu-portable
+        # (OpenSSL and zlib compiled in; needs only glibc >= 2.28).
+        # Auto-detection picks the dynamic one when the system has an
+        # OpenSSL 3 and falls back to the portable build otherwise.
+        [ -n "$(getconf GNU_LIBC_VERSION 2>/dev/null || true)" ] \
+            || fail "musl-based system detected; no prebuilt binary targets musl. Install with: cargo install git-include"
         case "${GIT_INCLUDE_FLAVOR:-auto}" in
-            dynamic) os_part="unknown-linux-gnu" ;;
-            static)  os_part="unknown-linux-musl" ;;
+            dynamic)  os_part="unknown-linux-gnu" ;;
+            portable) os_part="unknown-linux-gnu-portable" ;;
             auto)
-                if [ -n "$(getconf GNU_LIBC_VERSION 2>/dev/null || true)" ] \
-                    && command -v ldconfig >/dev/null 2>&1 \
-                    && ldconfig -p 2>/dev/null | grep -q 'libssl\.so\.3'; then
+                # ldconfig lives in /sbin, which non-root PATHs often lack
+                ldconfig=$(command -v ldconfig || command -v /sbin/ldconfig \
+                    || command -v /usr/sbin/ldconfig || true)
+                if [ -n "$ldconfig" ] \
+                    && "$ldconfig" -p 2>/dev/null | grep -q 'libssl\.so\.3'; then
                     os_part="unknown-linux-gnu"
                 else
-                    say "note: no glibc + OpenSSL 3 detected; using the static build"
-                    os_part="unknown-linux-musl"
+                    say "note: no system OpenSSL 3 detected; using the portable build"
+                    os_part="unknown-linux-gnu-portable"
                 fi
                 ;;
-            *) fail "GIT_INCLUDE_FLAVOR must be 'dynamic' or 'static'" ;;
+            *) fail "GIT_INCLUDE_FLAVOR must be 'dynamic' or 'portable'" ;;
         esac
         ;;
     Darwin) os_part="apple-darwin" ;;

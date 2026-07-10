@@ -20,8 +20,9 @@ default = ["self-update"]
 # (conda, distro packages) disable this: there, updating is the package
 # manager's job, and a self-replacing binary would fight it.
 self-update = ["dep:sha2"]
-# Statically link OpenSSL. Used for the downloadable Linux binaries
-# (musl targets), which must run on any distro without system libssl.
+# Compile OpenSSL in. Used for the portable Linux binaries (no system
+# libssl required) and the macOS binaries (macOS ships no OpenSSL;
+# only libssh2 needs it there — TLS uses the Security framework).
 vendored-openssl = ["git2/vendored-openssl"]
 
 [dependencies]
