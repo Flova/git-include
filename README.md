@@ -90,12 +90,19 @@ $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh
 
 The script detects your platform, downloads the latest release binary,
 verifies it against the release's `SHA256SUMS` manifest, and installs it to
-`~/.local/bin` (or `/usr/local/bin` as root). The Linux binaries are
-**fully static** (musl, with OpenSSL and libgit2 compiled in): a single
-ELF that runs on any distribution — old glibc, musl-based, or container
-images with no libssl. You can also just grab the binary for your platform
-from the [releases page](https://github.com/flova/git-include/releases)
-directly. Pin a version
+`~/.local/bin` (or `/usr/local/bin` as root). For Linux, two flavors are
+published and the script picks automatically (override with
+`GIT_INCLUDE_FLAVOR=dynamic|static`):
+
+- `*-linux-gnu` — dynamically linked against your distro's OpenSSL and
+  zlib; nothing bundled. Preferred when the system is compatible.
+- `*-linux-musl` — **fully static**, a single ELF that runs on any
+  distribution: old glibc, musl-based, or container images with no libssl.
+
+macOS binaries use the system Security framework for TLS; OpenSSL is
+compiled in only for SSH support (macOS ships no OpenSSL to link
+against). You can also just grab the binary for your platform from the
+[releases page](https://github.com/flova/git-include/releases) directly. Pin a version
 with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 

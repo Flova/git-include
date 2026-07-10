@@ -21,17 +21,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux download binaries are fully static (musl + vendored
-          # OpenSSL + vendored libgit2): a single ELF that runs on any
-          # distro, regardless of glibc or libssl version.
+          # Two Linux flavors, the user's choice (install.sh picks
+          # automatically): -gnu links the distro's OpenSSL and zlib
+          # dynamically (preferred, nothing bundled); -musl is fully
+          # static with vendored OpenSSL as the portable last resort.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            flags: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            flags: ""
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             flags: --features vendored-openssl
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             flags: --features vendored-openssl
-          # macOS binaries vendor OpenSSL too, so they don't depend on a
-          # Homebrew libssl being present.
+          # macOS: TLS goes through the system Security framework;
+          # OpenSSL is compiled in only for libssh2 (SSH support), since
+          # macOS ships no OpenSSL to link against.
           - target: x86_64-apple-darwin
             os: macos-13
             flags: --features vendored-openssl

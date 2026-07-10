@@ -159,11 +159,15 @@ mod imp {
         Ok(())
     }
 
-    /// The release target triple for this build.
+    /// The release target triple for this build. Linux ships two flavors
+    /// (dynamic -gnu and static -musl); each updates to its own kind.
     fn target_triple() -> Option<&'static str> {
+        let musl = cfg!(target_env = "musl");
         Some(match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") => "x86_64-unknown-linux-musl",
-            ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+            ("linux", "x86_64") if musl => "x86_64-unknown-linux-musl",
+            ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+            ("linux", "aarch64") if musl => "aarch64-unknown-linux-musl",
+            ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
             ("macos", "x86_64") => "x86_64-apple-darwin",
             ("macos", "aarch64") => "aarch64-apple-darwin",
             ("windows", "x86_64") => "x86_64-pc-windows-msvc",

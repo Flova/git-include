@@ -37,8 +37,8 @@ requirements:
     - if: unix
       then:
         - openssl
-  run:
-    - git # optional at runtime, but the natural companion
+  # No run dependencies beyond the run-exports of the host libraries:
+  # git-include embeds libgit2 and does not need the git binary.
 
 tests:
   - script:
