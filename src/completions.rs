@@ -38,7 +38,7 @@ pub fn print(shell: CompletionShell) {
 const BASH_GIT_SUBCOMMAND_SHIM: &str = r#"
 # --- git subcommand integration: makes `git include <TAB>` work ---------
 _git_include() {
-    local subcommands="add pull push status diff switch branches list remove completions help"
+    local subcommands="add init migrate pull push status diff switch branches list remove completions help"
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local sub=""
     # COMP_WORDS = (git include <sub> ...)
@@ -94,8 +94,8 @@ const FISH_GIT_SUBCOMMAND_SHIM: &str = r#"
 function __fish_git_include_dirs
     git ls-files -- '*.gitrepo' 2>/dev/null | string replace -r '/\.gitrepo$' ''
 end
-complete -c git -n '__fish_seen_subcommand_from include; and not __fish_seen_subcommand_from add init pull push status diff switch branches list remove completions self-update' \
-    -a 'add init pull push status diff switch branches list remove completions self-update'
+complete -c git -n '__fish_seen_subcommand_from include; and not __fish_seen_subcommand_from add init migrate pull push status diff switch branches list remove completions self-update' \
+    -a 'add init migrate pull push status diff switch branches list remove completions self-update'
 complete -c git -n '__fish_seen_subcommand_from include; and __fish_seen_subcommand_from pull push status diff switch branches remove' \
     -a '(__fish_git_include_dirs)'
 "#;

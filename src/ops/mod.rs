@@ -3,6 +3,7 @@ pub mod branches;
 pub mod diff;
 pub mod init;
 pub mod list;
+pub mod migrate;
 pub mod pull;
 pub mod push;
 pub mod remove;

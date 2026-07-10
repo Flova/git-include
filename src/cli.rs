@@ -157,6 +157,17 @@ pub enum Command {
         #[arg(long)]
         no_lfs: bool,
     },
+    /// Convert git submodules into included repositories, in place
+    Migrate {
+        /// Submodules to convert (default: every submodule in .gitmodules)
+        paths: Vec<PathBuf>,
+        /// Commit message template for the migration commits
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Skip Git LFS object download
+        #[arg(long)]
+        no_lfs: bool,
+    },
     /// List the upstream branches and tags of an included repository
     Branches {
         /// Included directory

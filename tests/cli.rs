@@ -1584,3 +1584,134 @@ fn lfs_available() -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
+
+// -------------------------------------------------- submodule migration ----
+
+#[test]
+fn migrate_converts_submodules_to_includes() {
+    let env = TestEnv::new();
+    let (url1, up1) = env.upstream("subone");
+    upstream_commit(&up1, "one.txt", "1\n", "one content");
+    let (url2, up2) = env.upstream("subtwo");
+    upstream_commit(&up2, "two.txt", "2\n", "two content");
+    let recorded1 = git_in(&up1, &["rev-parse", "HEAD"]);
+
+    let host = env.work_repo("host");
+    let allow = ["-c", "protocol.file.allow=always"];
+    git_in(
+        &host,
+        &[&allow[..], &["submodule", "add", &url1, "vendor/one"]].concat(),
+    );
+    git_in(
+        &host,
+        &[&allow[..], &["submodule", "add", &url2, "vendor/two"]].concat(),
+    );
+    git_in(&host, &["commit", "-q", "-m", "add submodules"]);
+
+    // Migrate one submodule by path: it becomes an include pinned to the
+    // recorded commit; the other submodule stays untouched.
+    let out = include_ok(&host, &["migrate", "vendor/one"]);
+    assert!(out.contains("Migrated 'vendor/one'"), "got: {out}");
+    assert!(host.join("vendor/one/.gitrepo").exists());
+    assert!(
+        !host.join("vendor/one/.git").exists(),
+        "submodule .git must be gone"
+    );
+    assert_eq!(read(&host, "vendor/one/one.txt"), "1\n");
+    let gm = read(&host, ".gitmodules");
+    assert!(!gm.contains("vendor/one"), "got: {gm}");
+    assert!(gm.contains("vendor/two"), "got: {gm}");
+    let pinned = git_in(
+        &host,
+        &["config", "--file", "vendor/one/.gitrepo", "subrepo.commit"],
+    );
+    assert_eq!(pinned, recorded1, "must pin the recorded submodule commit");
+    assert_clean(&host);
+
+    // An unknown path is refused with the list of known submodules.
+    let err = include_err(&host, &["migrate", "vendor/nope"]);
+    assert!(err.contains("not a submodule"), "got: {err}");
+    assert!(err.contains("vendor/two"), "got: {err}");
+
+    // Without arguments the remaining submodules are converted and
+    // .gitmodules disappears entirely.
+    include_ok(&host, &["migrate"]);
+    assert!(!host.join(".gitmodules").exists());
+    assert!(host.join("vendor/two/.gitrepo").exists());
+    assert_clean(&host);
+
+    // Nothing left to migrate.
+    let err = include_err(&host, &["migrate"]);
+    assert!(err.contains("no submodules"), "got: {err}");
+
+    // The result is a fully functional include: switch from the pin to
+    // the branch and pull new upstream work.
+    upstream_commit(&up2, "two.txt", "22\n", "two update");
+    include_ok(&host, &["switch", "vendor/two", "main"]);
+    assert_eq!(read(&host, "vendor/two/two.txt"), "22\n");
+    let s = include_ok(&host, &["status"]);
+    assert!(s.contains("vendor/one"), "got: {s}");
+    assert_clean(&host);
+}
+
+// --------------------------------------------- nested marker propagation ----
+
+#[test]
+fn push_ships_nested_marker_changes_upstream() {
+    let env = TestEnv::new();
+
+    // C has a main branch and a feature branch with different content.
+    let (url_c, work_c) = env.upstream("libc");
+    upstream_commit(&work_c, "c.txt", "main\n", "c main");
+    git_in(&work_c, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(work_c.join("c.txt"), "feature\n").unwrap();
+    git_in(&work_c, &["add", "."]);
+    git_in(&work_c, &["commit", "-q", "-m", "c feature"]);
+    git_in(&work_c, &["push", "-q", "origin", "feature"]);
+    git_in(&work_c, &["checkout", "-q", "main"]);
+
+    // B includes C (tracking main) and publishes that state.
+    let (url_b, work_b) = env.upstream("libb");
+    include_ok(&work_b, &["add", "-b", "main", &url_c, "vendor/c"]);
+    git_in(&work_b, &["push", "-q", "origin", "main"]);
+
+    // The host includes B; C arrives nested two levels down.
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url_b, "libs/b"]);
+    assert_eq!(read(&host, "libs/b/vendor/c/c.txt"), "main\n");
+
+    // Switch the nested include: this rewrites the marker file two
+    // levels down (libs/b/vendor/c/.gitrepo) plus C's content.
+    include_ok(&host, &["switch", "libs/b/vendor/c", "feature"]);
+    assert_eq!(read(&host, "libs/b/vendor/c/c.txt"), "feature\n");
+    let local_marker = read(&host, "libs/b/vendor/c/.gitrepo");
+    assert!(
+        local_marker.contains("branch = feature"),
+        "got: {local_marker}"
+    );
+
+    // Pushing the outer include must ship the nested marker change to
+    // B's remote verbatim...
+    include_ok(&host, &["push", "libs/b"]);
+    let bare_b = std::path::Path::new(&url_b);
+    let pushed_marker = git_in(bare_b, &["show", "main:vendor/c/.gitrepo"]);
+    assert!(
+        pushed_marker.contains("branch = feature"),
+        "nested marker must be pushed with its new target, got: {pushed_marker}"
+    );
+    assert_eq!(git_in(bare_b, &["show", "main:vendor/c/c.txt"]), "feature");
+    // ...while B's own marker stays stripped.
+    let toplevel = git_in(bare_b, &["ls-tree", "--name-only", "main"]);
+    assert!(!toplevel.contains(".gitrepo"), "got: {toplevel}");
+
+    // A fresh clone of B is immediately operational on the switched
+    // branch: its nested include reports up to date against 'feature'.
+    let clone = env.path("b-check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url_b, clone.to_str().unwrap()],
+    );
+    configure_user(&clone);
+    let out = include_ok(&clone, &["pull", "vendor/c"]);
+    assert!(out.contains("up to date"), "got: {out}");
+}

@@ -147,6 +147,17 @@ fn run(cli: Cli) -> Result<()> {
             };
             ops::branches::switch(&git, &subdir, &rev, &opts)
         }
+        Command::Migrate {
+            paths,
+            message,
+            no_lfs,
+        } => {
+            let paths: Vec<String> = paths
+                .iter()
+                .map(|p| repo_relative_subdir(&git, p))
+                .collect::<Result<_>>()?;
+            ops::migrate::run(&git, &paths, message.as_deref(), no_lfs)
+        }
         Command::Branches { subdir } => {
             let subdir = repo_relative_subdir(&git, &subdir)?;
             ops::branches::list(&git, &subdir)

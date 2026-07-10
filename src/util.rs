@@ -56,6 +56,11 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 
 /// Ref under which fetched upstream commits are pinned, so they survive
 /// `git gc` and enable offline `status`/`diff`.
+///
+/// The subdirectory is flattened into a single ref component ('/' becomes
+/// "--"): a ref hierarchy would make the pin of an include collide with
+/// the pin of an include nested inside it — a loose ref cannot be both a
+/// file and a parent directory.
 pub fn pin_ref(subdir: &str) -> String {
     let sanitized: String = subdir
         .chars()
@@ -67,25 +72,24 @@ pub fn pin_ref(subdir: &str) -> String {
             }
         })
         .collect();
-    // Git ref-name rules: no component may start with '.' or end in
-    // '.lock' (libgit2 rejects such refs outright).
-    let fixed: Vec<String> = sanitized
+    let mut name = sanitized
         .trim_matches('/')
         .split('/')
         .filter(|c| !c.is_empty())
-        .map(|c| {
-            let c = c
-                .strip_prefix('.')
-                .map(|r| format!("-{r}"))
-                .unwrap_or_else(|| c.to_string());
-            if c.ends_with(".lock") {
-                format!("{c}-")
-            } else {
-                c
-            }
-        })
-        .collect();
-    format!("refs/include/{}", fixed.join("/"))
+        .collect::<Vec<_>>()
+        .join("--");
+    // Git ref-name rules: no "..", no leading '.', no trailing '.' or
+    // '.lock' (libgit2 rejects such refs outright).
+    while name.contains("..") {
+        name = name.replace("..", "-.");
+    }
+    if name.starts_with('.') {
+        name.insert(0, '-');
+    }
+    if name.ends_with('.') || name.ends_with(".lock") {
+        name.push('-');
+    }
+    format!("refs/include/{name}")
 }
 
 pub fn short(sha: &str) -> &str {
@@ -98,13 +102,25 @@ mod tests {
 
     #[test]
     fn pin_refs_are_valid_and_stable() {
-        assert_eq!(pin_ref("vendor/lib"), "refs/include/vendor/lib");
+        assert_eq!(pin_ref("vendor/lib"), "refs/include/vendor--lib");
         assert_eq!(pin_ref("with space"), "refs/include/with-space");
         assert_eq!(pin_ref("weird~^:name"), "refs/include/weird---name");
         assert_eq!(
             pin_ref("/leading/trailing/"),
-            "refs/include/leading/trailing"
+            "refs/include/leading--trailing"
         );
+        assert_eq!(pin_ref(".hidden"), "refs/include/-.hidden");
+        assert_eq!(pin_ref("foo.lock"), "refs/include/foo.lock-");
+        assert_eq!(pin_ref("a..b"), "refs/include/a-.b");
+    }
+
+    #[test]
+    fn nested_include_pins_do_not_collide_with_their_parent() {
+        // "refs/include/a" as a loose ref would block "refs/include/a/b"
+        // from ever being created; the flattened names have no hierarchy.
+        let outer = pin_ref("libs/b");
+        let nested = pin_ref("libs/b/vendor/c");
+        assert!(!nested.starts_with(&format!("{outer}/")));
     }
 
     #[test]

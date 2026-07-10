@@ -514,6 +514,29 @@ impl Git {
         Ok(oid.to_string())
     }
 
+    /// Drop all index entries at/under `path` (worktree untouched). Used
+    /// to clear a submodule gitlink whose commit object does not exist in
+    /// this repository — checkout cannot use such an entry as baseline.
+    pub fn index_remove_path(&self, path: &str) -> Result<()> {
+        let mut index = self.repo.index()?;
+        let _ = index.remove_path(std::path::Path::new(path));
+        let _ = index.remove_dir(std::path::Path::new(path), 0);
+        index.write()?;
+        Ok(())
+    }
+
+    /// Reset the index to exactly match HEAD's tree (worktree untouched).
+    /// Needed after operations that change an entry's type — e.g. a
+    /// submodule gitlink becoming a plain directory — which checkout does
+    /// not always reconcile in the index.
+    pub fn reset_index_to_head(&self) -> Result<()> {
+        let tree = self.repo.head()?.peel_to_tree()?;
+        let mut index = self.repo.index()?;
+        index.read_tree(&tree)?;
+        index.write()?;
+        Ok(())
+    }
+
     /// Create a commit object with `tree`, an optional parent (None makes a
     /// root commit), and the author + message of `original` (committer is
     /// the configured user). No ref moves.
