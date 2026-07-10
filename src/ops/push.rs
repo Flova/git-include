@@ -111,9 +111,13 @@ fn is_verbatim_sync_commit(inc: &Include<'_>, commit: &str, stripped_tree: &str)
 pub struct PushOptions<'a> {
     pub dry_run: bool,
     pub squash: bool,
-    /// Push to this (possibly new) branch on the remote instead of the
-    /// tracked one. The marker keeps tracking its original revision.
+    /// Push to this (possibly new) branch instead of the tracked one.
     pub to_branch: Option<&'a str>,
+    /// Push to this remote instead of the tracked one (e.g. a fork).
+    pub to_remote: Option<&'a str>,
+    /// Keep the marker tracking its current remote/branch instead of
+    /// retargeting it to where the push went (temporary-fork PR flow).
+    pub keep: bool,
     pub message: Option<&'a str>,
     pub no_lfs: bool,
 }
@@ -123,17 +127,34 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
     let inc = Include::load(git, subdir)?;
     git.require_clean_worktree(&format!("push '{subdir}'"))?;
 
+    let target_remote = opts.to_remote.unwrap_or(&inc.meta.remote).to_string();
     let target_branch = opts.to_branch.unwrap_or(&inc.meta.branch).to_string();
-    let elsewhere = target_branch != inc.meta.branch;
+    let elsewhere = target_remote != inc.meta.remote || target_branch != inc.meta.branch;
+    if opts.keep && !elsewhere {
+        bail!("--keep only makes sense together with --branch/--remote");
+    }
 
     eprintln!("Fetching {} ({}) ...", inc.meta.remote, inc.meta.branch);
     let upstream = if elsewhere {
-        // Pushing to another (typically new) branch — e.g. a feature branch
-        // for an upstream pull request. The tracked revision is irrelevant
-        // here (and may even be a tag/commit pin); the target branch, if it
-        // already exists, must sit exactly at the recorded base so we never
-        // clobber unrelated work.
-        let refs = git.remote_refs(&inc.meta.remote)?;
+        // Pushing somewhere other than the tracked revision — a new branch
+        // and/or another remote (e.g. a fork for an upstream pull request).
+        // The target branch, if it already exists, must sit exactly at the
+        // recorded base so we never clobber unrelated work.
+        let refs = git.remote_refs(&target_remote)?;
+        if refs.tags.iter().any(|(_, n)| *n == target_branch) {
+            bail!(
+                "'{target_branch}' is a tag on {target_remote}; pass --branch to pick a \
+                 branch to push to"
+            );
+        }
+        if looks_like_oid(&target_branch) && !refs.branches.iter().any(|(_, n)| *n == target_branch)
+        {
+            bail!(
+                "'{}' is pinned to commit {}; pass --branch to pick a branch to push to",
+                inc.subdir,
+                short(&target_branch)
+            );
+        }
         let target = refs
             .branches
             .iter()
@@ -143,17 +164,17 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
             && *sha != inc.meta.commit
         {
             bail!(
-                "branch '{target_branch}' already exists on {} at {} (not at the recorded \
-                 base {}).\nPick a new branch name, or push to it from a matching state.",
-                inc.meta.remote,
+                "branch '{target_branch}' already exists on {target_remote} at {} (not at \
+                 the recorded base {}).\nPick a new branch name, or push to it from a \
+                 matching state.",
                 short(sha),
                 short(&inc.meta.commit),
             );
         }
         if target.is_none() {
             eprintln!(
-                "Branch '{target_branch}' does not exist on {} yet; it will be created.",
-                inc.meta.remote
+                "Branch '{target_branch}' does not exist on {target_remote} yet; \
+                 it will be created."
             );
         }
         // Make sure the base commit's objects are available locally.
@@ -281,31 +302,39 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
     }
 
     if replayed == 0 && upstream.is_some() {
-        println!("'{subdir}' has no local changes to push.");
+        if elsewhere {
+            println!(
+                "'{subdir}' has no local changes to push to {target_remote} ({target_branch})."
+            );
+            println!(
+                "To only retarget the include, use `git include remote` or \
+                 `git include switch`."
+            );
+        } else {
+            println!("'{subdir}' has no local changes to push.");
+        }
         return Ok(());
     }
     if dry_run {
         println!(
-            "dry run: {replayed} commit(s) would be pushed to {} ({target_branch}).",
-            inc.meta.remote
+            "dry run: {replayed} commit(s) would be pushed to {target_remote} ({target_branch})."
         );
         return Ok(());
     }
 
-    lfs::push_objects(git, &inc.meta.remote, &tip, subdir, no_lfs);
-    git.push_commit(&inc.meta.remote, &tip, &target_branch)?;
+    lfs::push_objects(git, &target_remote, &tip, subdir, no_lfs);
+    git.push_commit(&target_remote, &tip, &target_branch)?;
 
-    if elsewhere {
-        // The include keeps tracking its original revision: no marker or
-        // pin update. The local commits stay "to push" until they reach
-        // the tracked branch (e.g. once the pull request is merged).
+    if opts.keep {
+        // Temporary-fork flow: the include keeps tracking its original
+        // remote/branch. The local commits stay "to push" until they reach
+        // the tracked revision (e.g. once the pull request is merged).
         println!(
-            "Pushed {replayed} commit(s) from '{subdir}' to {} ({target_branch}).",
-            inc.meta.remote
+            "Pushed {replayed} commit(s) from '{subdir}' to {target_remote} ({target_branch})."
         );
         println!(
-            "'{subdir}' still tracks '{}'; pull once the changes land there.",
-            inc.meta.branch
+            "'{subdir}' still tracks {} ({}); pull once the changes land there.",
+            inc.meta.remote, inc.meta.branch
         );
         return Ok(());
     }
@@ -314,10 +343,14 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
 
     // Record the new upstream position in the marker file (one bookkeeping
     // commit; a no-op for future replays since the content is unchanged).
+    // A push to another remote/branch retargets the include there.
     let mut meta = inc.meta.clone();
+    meta.remote = target_remote.clone();
+    meta.branch = target_branch.clone();
     meta.commit = tip.clone();
     meta.parent = Some(git.head()?);
     meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
+    meta.ref_kind_hint = Some(crate::git::RevKind::Branch);
     let subtree = git.tree_with_blob(&local, MARKER_FILE, meta.serialize().as_bytes())?;
     inc.commit_subtree(
         &subtree,
@@ -326,18 +359,18 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
 
     if upstream.is_none() {
         println!(
-            "Published '{subdir}' to {} as new branch '{}' (head {}).",
-            inc.meta.remote,
-            inc.meta.branch,
+            "Published '{subdir}' to {target_remote} as new branch '{target_branch}' (head {}).",
             short(&tip)
         );
     } else {
         println!(
-            "Pushed {replayed} commit(s) from '{subdir}' to {} ({}); upstream is now {}.",
-            inc.meta.remote,
-            inc.meta.branch,
+            "Pushed {replayed} commit(s) from '{subdir}' to {target_remote} \
+             ({target_branch}); upstream is now {}.",
             short(&tip)
         );
+    }
+    if elsewhere {
+        println!("'{subdir}' now tracks {target_remote} ({target_branch}).");
     }
     Ok(())
 }

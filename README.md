@@ -228,16 +228,25 @@ into one final commit, so the pushed content always matches your tree.
 If upstream moved in the meantime, `push` refuses and asks you to
 `git include pull` first, so upstream never gets surprise merge results.
 
-To propose changes instead of pushing straight to the tracked branch —
-e.g. for an upstream pull request — push them to a **new branch**:
+Pushes can also target a **different branch and/or remote** — a feature
+branch, or a fork:
 
 ```console
 $ git include push vendor/widgets --branch feature/my-fix
+$ git include push vendor/widgets --remote git@github.com:me/widgets-fork -b pr/fix --keep
 ```
 
-The include keeps tracking its original revision (the marker is not
-touched); once the proposal is merged upstream, a normal `pull` picks it
-up. This also works from an include pinned to a tag or commit.
+By default the include is **retargeted** to where the push went (the
+marker records the new remote/branch, and future pulls follow it). Pass
+`--keep` for the temporary-fork flow: the push happens, but the marker
+keeps tracking the original revision — once the proposal is merged
+upstream, a normal `pull` picks it up. Both work from an include pinned
+to a tag or commit (pass `--branch` to name the target). An existing
+target branch is only accepted at the recorded base, so unrelated work is
+never clobbered.
+
+`pull` and `switch` accept `--remote <url>` as well — pulling always
+retargets the marker to the remote it pulled from.
 
 ### Switch the tracked branch
 
@@ -260,11 +269,11 @@ command again. `switch` also accepts a tag or commit id — see
 | Command | Description |
 | --- | --- |
 | `git include add <remote> <dir> [-b <branch> \| -t <tag> \| --commit <sha>]` | Vendor an upstream repository into `<dir>`, tracking a branch (default: the remote's default branch) or pinned to a tag/commit. |
-| `git include pull [<dir>] [--all] [--force]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes. |
+| `git include pull [<dir>] [--all] [--force] [-r <url>]` | Merge new upstream commits into `<dir>` (or all includes); `--force` discards local changes, `-r` pulls from (and retargets to) another remote. |
 | `git include push <dir> [-n/--dry-run]` | Replay local commits touching `<dir>` onto the upstream branch and push. |
 | `git include status [<dir>] [-f/--fetch]` | Show sync state: commits available upstream, commits to push, uncommitted edits. |
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
-| `git include switch <dir> <branch\|tag\|commit>` | Track a different branch, or pin to a tag/commit, carrying local changes over. |
+| `git include switch <dir> <branch\|tag\|commit>` `[-r <url>]` | Track a different branch, or pin to a tag/commit, carrying local changes over; `-r` switches the remote too. |
 | `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
 | `git include remote <dir> [<url>]` | Show — or change — the upstream remote (e.g. after a repo moved, or to use a fork). |
 | `git include list` | List all includes, nested ones indented. |

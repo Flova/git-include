@@ -1082,7 +1082,56 @@ fn commit_messages_are_templatable_via_flag_and_config() {
 // ------------------------------------------- push to a different branch ----
 
 #[test]
-fn push_to_new_remote_branch_leaves_tracking_untouched() {
+fn push_to_new_branch_retargets_the_marker_by_default() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    commit_file(
+        &host,
+        "vendor/lib/feat.txt",
+        "f\n",
+        "start a feature branch",
+    );
+
+    let out = include_ok(&host, &["push", "vendor/lib", "--branch", "feature/work"]);
+    assert!(out.contains("now tracks"), "got: {out}");
+
+    // The feature branch exists upstream with our commit; main is untouched.
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "feature/work",
+            &url,
+            clone.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(read(&clone, "feat.txt"), "f\n");
+    assert!(!git_in(&clone, &["ls-tree", "--name-only", "origin/main"]).contains("feat.txt"));
+
+    // The marker now tracks the new branch; everything is in sync.
+    let branch = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.branch"],
+    );
+    assert_eq!(branch, "feature/work");
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("up to date"), "got: {s}");
+    assert!(s.contains("clean"), "got: {s}");
+
+    // Further work pushes straight to the tracked feature branch.
+    commit_file(&host, "vendor/lib/feat.txt", "f2\n", "more feature work");
+    include_ok(&host, &["push", "vendor/lib"]);
+    git_in(&clone, &["pull", "-q", "origin", "feature/work"]);
+    assert_eq!(read(&clone, "feat.txt"), "f2\n");
+}
+
+#[test]
+fn push_with_keep_leaves_tracking_untouched() {
     let env = TestEnv::new();
     let (url, _up) = env.upstream("lib");
     let host = env.work_repo("host");
@@ -1091,12 +1140,21 @@ fn push_to_new_remote_branch_leaves_tracking_untouched() {
 
     let out = include_ok(
         &host,
-        &["push", "vendor/lib", "--branch", "feature/proposal"],
+        &["push", "vendor/lib", "-b", "feature/proposal", "--keep"],
     );
-    assert!(out.contains("feature/proposal"), "got: {out}");
-    assert!(out.contains("still tracks 'main'"), "got: {out}");
+    assert!(out.contains("still tracks"), "got: {out}");
 
-    // The feature branch exists upstream with our commit; main is untouched.
+    // Marker untouched: still tracking main, commit still counts as
+    // unpushed (it lands on main via the PR merge later).
+    let branch = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.branch"],
+    );
+    assert_eq!(branch, "main");
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("1 commit(s) to push"), "got: {s}");
+
+    // The proposal branch content is upstream nonetheless.
     let clone = env.path("check");
     git_in(
         env.root.path(),
@@ -1110,19 +1168,91 @@ fn push_to_new_remote_branch_leaves_tracking_untouched() {
         ],
     );
     assert_eq!(read(&clone, "feat.txt"), "f\n");
-    let log = git_in(&clone, &["log", "--format=%s", "feature/proposal"]);
-    assert!(log.contains("propose a feature"), "log: {log}");
-    assert!(!git_in(&clone, &["ls-tree", "--name-only", "origin/main"]).contains("feat.txt"));
 
-    // No marker bookkeeping happened: the commit still counts as unpushed
-    // relative to the tracked branch (it lands there via the PR merge).
+    // The proposal branch now sits ahead of the recorded base, so pushing
+    // to it again is refused; --keep alone is refused too.
+    let err = include_err(
+        &host,
+        &["push", "vendor/lib", "-b", "feature/proposal", "--keep"],
+    );
+    assert!(err.contains("already exists"), "got: {err}");
+    let err = include_err(&host, &["push", "vendor/lib", "--keep"]);
+    assert!(err.contains("--keep"), "got: {err}");
+}
+
+#[test]
+fn push_and_pull_work_against_a_fork_remote() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Fork the upstream (a mirror clone acts as the fork).
+    let fork = env.path("fork.git");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", "--mirror", &url, fork.to_str().unwrap()],
+    );
+    let fork_url = fork.to_str().unwrap().to_string();
+
+    // Contribute via the fork WITHOUT retargeting (temporary fork, PR flow).
+    commit_file(&host, "vendor/lib/fix.txt", "x\n", "fix for upstream");
+    include_ok(
+        &host,
+        &[
+            "push",
+            "vendor/lib",
+            "--remote",
+            &fork_url,
+            "-b",
+            "pr/fix",
+            "--keep",
+        ],
+    );
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(recorded, url, "marker must still point at the original");
     let s = include_ok(&host, &["status", "vendor/lib"]);
     assert!(s.contains("1 commit(s) to push"), "got: {s}");
 
-    // The feature branch now sits ahead of the recorded base, so pushing
-    // to it again is refused (it is not at the base anymore).
-    let err = include_err(&host, &["push", "vendor/lib", "-b", "feature/proposal"]);
-    assert!(err.contains("already exists"), "got: {err}");
+    // Now push to the fork's main WITH retargeting (the default).
+    let out = include_ok(&host, &["push", "vendor/lib", "--remote", &fork_url]);
+    assert!(out.contains("now tracks"), "got: {out}");
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(recorded, fork_url);
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("up to date"), "got: {s}");
+    assert!(s.contains("clean"), "got: {s}");
+
+    // The original upstream never saw the fix; the fork did.
+    let orig = env.path("orig-check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, orig.to_str().unwrap()],
+    );
+    assert!(!orig.join("fix.txt").exists());
+    let fcheck = env.path("fork-check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &fork_url, fcheck.to_str().unwrap()],
+    );
+    assert_eq!(read(&fcheck, "fix.txt"), "x\n");
+
+    // pull --remote retargets back to the original upstream (the marker
+    // always follows a pull).
+    include_ok(&host, &["pull", "vendor/lib", "--remote", &url, "--force"]);
+    let recorded = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.remote"],
+    );
+    assert_eq!(recorded, url);
+    assert!(!host.join("vendor/lib/fix.txt").exists());
+    assert_clean(&host);
 }
 
 #[test]

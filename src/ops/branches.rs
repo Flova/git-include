@@ -35,7 +35,7 @@ pub fn list(git: &Git, subdir: &str) -> Result<()> {
 /// surfaced like a pull).
 pub fn switch(git: &Git, subdir: &str, rev: &str, opts: &PullOptions<'_>) -> Result<()> {
     let inc = Include::load(git, subdir)?;
-    if rev == inc.meta.branch && !opts.force {
+    if rev == inc.meta.branch && opts.remote.is_none() && !opts.force {
         println!("'{subdir}' already tracks '{rev}'.");
         return Ok(());
     }
