@@ -6,6 +6,9 @@
 #   GIT_INCLUDE_VERSION   install a specific release tag (default: latest)
 #   GIT_INCLUDE_BIN_DIR   install directory (default: ~/.local/bin, or
 #                         /usr/local/bin when run as root)
+#   GIT_INCLUDE_FLAVOR    Linux only: 'dynamic' (links your distro's
+#                         OpenSSL; preferred) or 'static' (fully static
+#                         musl build, runs on any distro). Default: auto.
 set -euo pipefail
 
 REPO="flova/git-include"
@@ -19,7 +22,27 @@ command -v curl >/dev/null 2>&1 || fail "curl is required"
 os=$(uname -s)
 arch=$(uname -m)
 case "$os" in
-    Linux)  os_part="unknown-linux-gnu" ;;
+    Linux)
+        # Two flavors are published: -gnu (dynamically linked against the
+        # system's glibc and OpenSSL; preferred) and -musl (fully static;
+        # runs anywhere). Auto-detection picks -gnu when the system looks
+        # compatible and falls back to the static build otherwise.
+        case "${GIT_INCLUDE_FLAVOR:-auto}" in
+            dynamic) os_part="unknown-linux-gnu" ;;
+            static)  os_part="unknown-linux-musl" ;;
+            auto)
+                if [ -n "$(getconf GNU_LIBC_VERSION 2>/dev/null || true)" ] \
+                    && command -v ldconfig >/dev/null 2>&1 \
+                    && ldconfig -p 2>/dev/null | grep -q 'libssl\.so\.3'; then
+                    os_part="unknown-linux-gnu"
+                else
+                    say "note: no glibc + OpenSSL 3 detected; using the static build"
+                    os_part="unknown-linux-musl"
+                fi
+                ;;
+            *) fail "GIT_INCLUDE_FLAVOR must be 'dynamic' or 'static'" ;;
+        esac
+        ;;
     Darwin) os_part="apple-darwin" ;;
     *) fail "unsupported OS: $os (on Windows, use the MSI installer instead)" ;;
 esac
@@ -28,6 +51,9 @@ case "$arch" in
     aarch64|arm64) arch_part="aarch64" ;;
     *) fail "unsupported architecture: $arch" ;;
 esac
+if [ "$os_part" = "apple-darwin" ] && [ "$arch_part" = "x86_64" ]; then
+    fail "no prebuilt binary for Intel Macs; install with: cargo install git-include"
+fi
 target="${arch_part}-${os_part}"
 
 # --- resolve version -------------------------------------------------------

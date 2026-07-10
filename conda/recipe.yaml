@@ -7,7 +7,8 @@
 # Conda builds compile WITHOUT the `self-update` cargo feature: updating a
 # conda-managed binary is conda's job, not the binary's.
 context:
-  version: "0.1.0"
+  # Conda version syntax has no '-': 0.1.0-alpha.1 (Cargo.toml) -> 0.1.0a1.
+  version: "0.1.0a1"
 
 package:
   name: git-include
@@ -37,8 +38,8 @@ requirements:
     - if: unix
       then:
         - openssl
-  run:
-    - git # optional at runtime, but the natural companion
+  # No run dependencies beyond the run-exports of the host libraries:
+  # git-include embeds libgit2 and does not need the git binary.
 
 tests:
   - script:

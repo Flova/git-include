@@ -54,9 +54,23 @@ pub fn lfs_installed() -> bool {
 }
 
 fn run_lfs(git: &Git, args: &[&str]) -> Result<(), String> {
+    // Inject the LFS filter configuration for this one invocation: newer
+    // git-lfs (>= 3.5) refuses to operate — exit code 0, no effect — when
+    // `git lfs install` was never run. git-include should work with the
+    // bare git-lfs binary on PATH, without requiring global setup.
     let out = Command::new("git")
         .arg("-C")
         .arg(&git.toplevel)
+        .args([
+            "-c",
+            "filter.lfs.smudge=git-lfs smudge -- %f",
+            "-c",
+            "filter.lfs.clean=git-lfs clean -- %f",
+            "-c",
+            "filter.lfs.process=git-lfs filter-process",
+            "-c",
+            "filter.lfs.required=true",
+        ])
         .arg("lfs")
         .args(args)
         .output()

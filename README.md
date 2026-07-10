@@ -49,6 +49,7 @@ $ git include push vendor/widgets      # contribute your changes back
 - [Handling merge conflicts](#handling-merge-conflicts)
 - [How it works](#how-it-works)
 - [FAQ](#faq)
+- [Development](#development)
 
 ---
 
@@ -89,7 +90,19 @@ $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh
 
 The script detects your platform, downloads the latest release binary,
 verifies it against the release's `SHA256SUMS` manifest, and installs it to
-`~/.local/bin` (or `/usr/local/bin` as root). Pin a version
+`~/.local/bin` (or `/usr/local/bin` as root). For Linux, two flavors are
+published and the script picks automatically (override with
+`GIT_INCLUDE_FLAVOR=dynamic|static`):
+
+- `*-linux-gnu` — dynamically linked against your distro's OpenSSL and
+  zlib; nothing bundled. Preferred when the system is compatible.
+- `*-linux-musl` — **fully static**, a single ELF that runs on any
+  distribution: old glibc, musl-based, or container images with no libssl.
+
+macOS binaries use the system Security framework for TLS; OpenSSL is
+compiled in only for SSH support (macOS ships no OpenSSL to link
+against). You can also just grab the binary for your platform from the
+[releases page](https://github.com/flova/git-include/releases) directly. Pin a version
 with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 
@@ -104,14 +117,18 @@ $ git include self-update            # or --version vX.Y.Z, or -n to preview
 itself — the curl-installed ones and the Windows MSI. Package-manager
 builds like conda disable it via a cargo feature flag.)
 
-**Windows:** download the MSI installer from the
+**Windows:** download the MSI installer (x64) from the
 [latest release](https://github.com/flova/git-include/releases/latest) —
-it installs `git-include.exe` and puts it on `PATH`. (`self-update` works
-on Windows too.)
+it installs `git-include.exe` and puts it on `PATH`. On ARM64 Windows,
+grab `git-include-aarch64-pc-windows-msvc.exe` from the release assets
+instead and place it on your `PATH`. (`self-update` works on Windows
+too, for both architectures.)
 
 **Conda:** every release ships `.conda` packages for linux-64,
-linux-aarch64, osx-64, osx-arm64 and win-64 (see the release assets; the
-recipe lives in `conda/recipe.yaml`). Conda builds are compiled without
+linux-aarch64, osx-arm64 and win-64 (see the release assets; the
+recipe lives in `conda/recipe.yaml`). There are no prebuilt Intel-Mac
+packages or binaries — Intel Mac users install from source with
+`cargo install git-include`. Conda builds are compiled without
 the self-update mechanism — there, updating is conda's job
 (`conda update git-include`), and `git include self-update` says so
 instead of fighting the package manager.
@@ -502,6 +519,25 @@ None at runtime — git-include embeds libgit2 and talks to remotes itself.
 The only optional external dependency is `git-lfs` (with git) for LFS
 content, and your credentials are picked up the standard way (ssh-agent and
 git credential helpers).
+
+## Development
+
+The development and release environment is pinned with
+[pixi](https://pixi.sh) — one command gets you the exact Rust toolchain,
+git-lfs, C compiler and rattler-build the project is built and tested
+with (versions locked in `pixi.lock`):
+
+```console
+$ pixi run test               # full test suite, LFS round-trip included
+$ pixi run lint               # rustfmt + clippy, exactly as CI runs them
+$ pixi run build              # release binary for your platform
+$ pixi run -e build conda-build   # build the conda package
+```
+
+A plain `cargo test` works too if you have a matching Rust
+(`rust-toolchain.toml`) and git-lfs installed. Releases are built by CI
+from a `v*` tag; the release workflow can also be dispatched manually as
+a dry run that produces all artifacts without publishing anything.
 
 ## License
 

@@ -1,6 +1,6 @@
 [package]
 name = "git-include"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.96"
 description = "A modern git-subrepo alternative: vendor external repositories as plain files with full two-way sync"
@@ -20,6 +20,9 @@ default = ["self-update"]
 # (conda, distro packages) disable this: there, updating is the package
 # manager's job, and a self-replacing binary would fight it.
 self-update = ["dep:sha2"]
+# Statically link OpenSSL. Used for the downloadable Linux binaries
+# (musl targets), which must run on any distro without system libssl.
+vendored-openssl = ["git2/vendored-openssl"]
 
 [dependencies]
 anyhow = "1.0.103"

@@ -18,29 +18,24 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install git-lfs (for the LFS round-trip test)
+      - name: Install pixi (pinned dev environment)
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update -q && sudo apt-get install -y -q git-lfs
-          else
-            brew install git-lfs || true
-          fi
-          git lfs version
-      - run: cargo test --all-targets
-      - run: cargo build --release
+          curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.72.2 bash
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+      - run: pixi run test
+      - run: pixi run build
       - name: Check the package-manager build (self-update disabled)
-        run: cargo check --no-default-features
+        run: pixi run check-minimal
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install pixi (pinned dev environment)
+        run: |
+          curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.72.2 bash
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: pixi run lint
