@@ -551,12 +551,11 @@ $ pixi run build              # release binary for your platform
 $ pixi run -e build conda-build   # build the conda package
 ```
 
-A plain `cargo test` works too if you have a matching Rust
-(`rust-toolchain.toml`) and git-lfs installed. Releases are built by CI
-from a `v*` tag, entirely with the pixi-pinned toolchain (the `dist`
-environment — no rustup, no system packages); the release workflow can
-also be dispatched manually as a dry run that produces all artifacts
-without publishing anything.
+There is no separate toolchain setup — development, CI and releases all
+build through pixi. Releases are built by CI from a `v*` tag, entirely
+with the pixi-pinned toolchain (the `dist` environment — no rustup, no
+system packages); the release workflow can also be dispatched manually
+as a dry run that produces all artifacts without publishing anything.
 
 ## License
 

@@ -42,19 +42,28 @@ pub fn plan_replay(inc: &Include<'_>, start_commit: &str) -> Result<ReplayPlan> 
         .context("replay base commit has no tree")?;
 
     for commit in git.walk_range(parent, &git.head()?)? {
-        let Some(cur) = git.tree_at(&commit, &inc.subdir) else {
-            // The directory was deleted in this commit; deleting the whole
-            // upstream project is never what a push should do.
-            bail!(
+        let cur_raw = git.tree_at(&commit, &inc.subdir);
+        let prev_raw = git.tree_at(&format!("{commit}^"), &inc.subdir);
+        let (cur, prev) = match (cur_raw, prev_raw) {
+            // Neither this commit nor its parent has any trace of the
+            // directory: the commit belongs to history from before the
+            // include existed (e.g. a side branch that forked earlier and
+            // was merged in later). Nothing of it can concern the include.
+            (None, None) => continue,
+            // The directory existed and this commit deletes it; deleting
+            // the whole upstream project is never what a push should do.
+            (None, Some(_)) => bail!(
                 "commit {} removes '{}' entirely; refusing to push a deletion upstream",
                 short(&commit),
                 inc.subdir
-            );
-        };
-        let cur = git.tree_without_entry(&cur, MARKER_FILE)?;
-        let prev = match git.tree_at(&format!("{commit}^"), &inc.subdir) {
-            Some(t) => git.tree_without_entry(&t, MARKER_FILE)?,
-            None => empty.clone(),
+            ),
+            (Some(cur), prev) => (
+                git.tree_without_entry(&cur, MARKER_FILE)?,
+                match prev {
+                    Some(t) => git.tree_without_entry(&t, MARKER_FILE)?,
+                    None => empty.clone(),
+                },
+            ),
         };
         if cur == prev {
             continue; // did not change the included directory

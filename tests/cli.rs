@@ -1715,3 +1715,42 @@ fn push_ships_nested_marker_changes_upstream() {
     let out = include_ok(&clone, &["pull", "vendor/c"]);
     assert!(out.contains("up to date"), "got: {out}");
 }
+
+// ------------------------------------- merged history predating include ----
+
+#[test]
+fn push_skips_merged_history_from_before_the_include() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+
+    // A side branch forks BEFORE the include exists...
+    git_in(&host, &["branch", "old-work"]);
+
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // ...collects a commit whose tree has no vendor/lib at all...
+    git_in(&host, &["checkout", "-q", "old-work"]);
+    commit_file(&host, "unrelated.txt", "u\n", "unrelated old work");
+    git_in(&host, &["checkout", "-q", "main"]);
+    // ...and is merged after the include was added. That commit is now in
+    // parent..HEAD but must not be mistaken for deleting the include.
+    git_in(
+        &host,
+        &["merge", "-q", "--no-ff", "-m", "merge old work", "old-work"],
+    );
+
+    // A real change to the include on top.
+    commit_file(&host, "vendor/lib/new.txt", "n\n", "include change");
+
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("1 commit(s) to push"), "got: {s}");
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 1 commit"), "got: {out}");
+
+    let bare = std::path::Path::new(&url);
+    assert_eq!(git_in(bare, &["show", "main:new.txt"]), "n");
+    let log = git_in(bare, &["log", "--format=%s", "main"]);
+    assert!(!log.contains("unrelated"), "got: {log}");
+    assert!(!log.contains("merge old work"), "got: {log}");
+}

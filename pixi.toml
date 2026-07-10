@@ -5,9 +5,10 @@
 #   pixi run build       # release binary for the host platform
 #   pixi run -e build conda-build   # build the conda package via rattler-build
 #
-# The Rust version here matches rust-toolchain.toml, which pins the same
-# version for the rustup-based release-binary builds. Bump both together.
-# Exact versions of everything (transitive included) live in pixi.lock.
+# The single source of truth for the toolchain: development, CI and
+# releases all build through these environments — there is no separate
+# toolchain setup. Exact versions of everything (transitive included)
+# live in pixi.lock.
 
 [workspace]
 name = "git-include"
