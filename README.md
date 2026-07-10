@@ -55,21 +55,13 @@ $ git include push vendor/widgets      # contribute your changes back
 
 ## Why not submodules / subtree / subrepo?
 
-|                                      | submodule | subtree | subrepo | **git-include** |
-| ------------------------------------ | :-------: | :-----: | :-----: | :-------------: |
-| Plain `git clone` just works         |     ✗     |    ✓    |    ✓    |        ✓        |
-| Collaborators need no extra tool     |     ✗     |    ✓    |    ✓    |        ✓        |
-| Clean host history (no merge noise)  |     ✓     |    ✗    |    ✓    |        ✓        |
-| Two-way sync (pull *and* push)       |     ✓     |   (✓)   |    ✓    |        ✓        |
-| Individual commits pushed upstream   |     ✓     |    ✓    |    ✓    |        ✓        |
-| No hidden state outside the worktree |     ✗     |    ✗    |    ✓    |        ✓        |
-| Single static binary                 |    n/a    |   n/a   | ✗ (bash)|        ✓        |
-| Git LFS aware                        |     ✓     |    ✗    |    ✗    |        ✓        |
-| One-command branch switching         |     ✗     |    ✗    |    ✗    |        ✓        |
-| Status/diff against upstream         |     ✗     |    ✗    |   (✓)   |        ✓        |
-| Nested vendored repos                |     ✓     |    ✗    |   (✓)   |        ✓        |
+Submodules make every collaborator pay (extra tooling, `--recursive`,
+detached-HEAD surprises); subtree pollutes your history with merge noise
+and hides its state in ways that are hard to inspect; both leave common
+tasks — "diff against upstream", "switch the tracked branch", "what's not
+pushed yet?" — awkward or impossible.
 
-The fundamental idea is the same as git-subrepo: **the vendored code is just
+The fundamental idea here is the same as git-subrepo: **the vendored code is just
 files in your repository**, and a marker file records where they came from and
 which upstream commit they correspond to. Everything else — merging, pushing,
 diffing — is derived from that.
