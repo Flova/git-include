@@ -41,6 +41,7 @@ $ git include push vendor/widgets      # contribute your changes back
 - [Tab completion](#tab-completion)
 - [Quickstart](#quickstart)
 - [Command reference](#command-reference)
+- [Migrating away from submodules](#migrating-away-from-submodules)
 - [Pinning to tags and commits](#pinning-to-tags-and-commits)
 - [Custom commit messages](#custom-commit-messages)
 - [The `.gitrepo` marker file](#the-gitrepo-marker-file)
@@ -289,6 +290,7 @@ command again. `switch` also accepts a tag or commit id — see
 | `git include diff <dir> [--upstream] [--stat] [-f/--fetch]` | Diff `<dir>` against the last-synced commit, or against the latest upstream head. |
 | `git include switch <dir> <branch\|tag\|commit>` `[-r <url>]` | Track a different branch, or pin to a tag/commit, carrying local changes over; `-r` switches the remote too. |
 | `git include branches <dir>` | List upstream branches and tags, marking the tracked revision. |
+| `git include migrate [<path>...]` | Convert git submodules into includes — all of them, or just the given paths. |
 | `git include list` | List all includes, nested ones indented. |
 | `git include remove <dir>` | Delete an include from the working tree (history and upstream untouched). |
 | `git include completions <shell>` | Print a tab-completion script. |
@@ -299,6 +301,25 @@ work from anywhere inside the repository. `--no-lfs` is accepted by `add`,
 `pull`, `push` and `switch` to skip LFS transfers; `-m/--message` is
 accepted by every command that creates a sync commit (see
 [Custom commit messages](#custom-commit-messages)).
+
+## Migrating away from submodules
+
+One command turns a submodule-based repository into an include-based one:
+
+```console
+$ git include migrate                # convert every submodule
+$ git include migrate vendor/lib     # or just this one
+Migrating submodule 'vendor/lib' (recorded commit 1a2b3c4) ...
+Migrated 'vendor/lib' -> include of https://github.com/example/lib pinned to commit 1a2b3c4.
+```
+
+Each submodule becomes an include **pinned to the exact commit the
+submodule recorded**, so the migration never changes your tree's content
+— one commit per submodule, converting the gitlink into plain files with
+a `.gitrepo` marker. `.gitmodules` entries are removed (the file is
+deleted once empty), and the submodule's leftover `.git/modules` clone
+and `submodule.*` config are cleaned up. Afterwards, switch any include
+from its pin to a living branch with `git include switch <dir> <branch>`.
 
 ## Pinning to tags and commits
 
