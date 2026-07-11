@@ -336,6 +336,10 @@ fn push_preserves_original_author_timestamp() {
             "--date=2020-03-15T09:00:00+00:00",
         ],
     );
+    // Compare the raw epoch (%at) rather than a formatted date: git's ISO
+    // rendering of a UTC offset varies by version (`+00:00` vs `Z`), so the
+    // epoch is the only version-stable equality to assert against.
+    let host_author_epoch = git_in(&host, &["log", "-1", "--format=%at"]);
 
     include_ok(&host, &["push", "vendor/lib"]);
     let clone = env.path("check");
@@ -343,10 +347,10 @@ fn push_preserves_original_author_timestamp() {
         env.root.path(),
         &["clone", "-q", &url, clone.to_str().unwrap()],
     );
-    let author_date = git_in(&clone, &["log", "-1", "--format=%aI", "main"]);
+    let clone_author_epoch = git_in(&clone, &["log", "-1", "--format=%at", "main"]);
     assert_eq!(
-        author_date, "2020-03-15T09:00:00+00:00",
-        "the author timestamp must survive the rewrite unchanged, got: {author_date}"
+        clone_author_epoch, host_author_epoch,
+        "the author timestamp must survive the rewrite unchanged"
     );
 }
 

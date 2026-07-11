@@ -5,9 +5,9 @@
 <p align="center">
   <b>English</b> | <a href="README.zh-CN.md">中文</a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="https://github.com/flova/git-include/actions/workflows/ci.yml"><img src="https://github.com/flova/git-include/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/flova/git-include" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="unsafe forbidden"></p>
+  <a href="https://github.com/flova/git-include/actions/workflows/ci.yml"><img align="middle" src="https://github.com/flova/git-include/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img align="middle" src="https://img.shields.io/github/license/flova/git-include" alt="License: MIT"></a>
+  <img align="middle" src="https://img.shields.io/badge/unsafe-forbidden-success" alt="unsafe forbidden"></p>
 
 `git-include` is a modern, single-binary alternative to
 [git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
