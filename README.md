@@ -10,10 +10,10 @@
   <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="unsafe forbidden">
 </p>
 
-`git-include` is a modern, single-binary alternative to
-[git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
-inlines an upstream repository into a subdirectory of your repository, plus one
-small marker file. That's the whole model:
+`git-include` is a modern alternative to submodules and
+[git-subrepo](https://github.com/ingydotnet/git-subrepo). It inlines an
+upstream repository together with a small marker file into a subdirectory of
+your repository. That's the whole model:
 
 - **Collaborators need nothing.** They `git clone` and get working code. No
   `--recursive`, no `submodule update`, no git-include installation required.
