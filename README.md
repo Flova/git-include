@@ -21,9 +21,8 @@ small marker file. That's the whole model:
 - **Export built in.** `git include init` turns any ordinary directory into
   a new included repository, extracting its full history from your commits —
   ready to push to its own (even empty) repository.
-- **First-class Git LFS support**, painless **branch switching**, quick
-  **status/diff against upstream**, **nested includes**, and **tab completion**
-  out of the box.
+- Painless **branch switching**, quick **status/diff against upstream**,
+  **nested includes**, and **tab completion** out of the box.
 
 ```console
 $ git include add https://github.com/example/widgets vendor/widgets
