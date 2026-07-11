@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 320" role="img" aria-label="git-include. Vendor external git repos as plain files, with full two-way sync.">
+  <title>git-include.</title>
+  <rect x="0" y="0" width="1000" height="320" fill="#fff"/>
+  <g transform="rotate(-1.5 40 230)" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="800">
+    <text x="40" y="110" font-size="110" letter-spacing="-2" fill="#111">GIT-</text>
+    <text x="40" y="230" font-size="110" letter-spacing="-2" fill="#111">INCLUDE<tspan fill="#e30613">.</tspan></text>
+  </g>
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="800" font-size="26" letter-spacing="0.3">
+    <rect x="494" y="250" width="182" height="30" fill="#e30613"/>
+    <text x="40" y="270" fill="#111">VENDOR EXTERNAL GIT REPOS AS <tspan fill="#fff">PLAIN FILES</tspan> &#8212;</text>
+    <rect x="190" y="280" width="205" height="30" fill="#e30613"/>
+    <text x="40" y="300" fill="#111">WITH FULL <tspan fill="#fff">TWO-WAY SYNC</tspan>. NO SUBMODULES.</text>
+  </g>
+  <rect x="0" y="312" width="1000" height="8" fill="#111"/>
+</svg>
