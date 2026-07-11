@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="禁用 unsafe">
 </p>
 
-`git-include` 是 [git-subrepo](https://github.com/ingydotnet/git-subrepo) 的现代化单文件替代品，使用 Rust 编写。它会把一个上游仓库以子目录的形式引入到你的仓库中，再加上一个小小的标记文件。这就是它的全部模型：
+`git-include` 是 submodule 和 [git-subrepo](https://github.com/ingydotnet/git-subrepo) 的现代化替代品。它会把一个上游仓库连同一个小小的标记文件一起引入到你仓库的一个子目录中。这就是它的全部模型：
 
 - **协作者什么都不用装。** 他们只需 `git clone` 就能拿到可运行的代码，不需要 `--recursive`、不需要 `submodule update`、也不需要安装 git-include。只有负责与上游同步的人才需要这个工具。
 - **双向同步。** `git include pull` 会把上游的新工作合并进你的目录树；`git include push` 会根据你的提交重建上游历史——每一个改动过该目录的宿主提交都会变成一个独立的上游提交，保留原始提交信息和作者（即使是在某次 pull 之前做的提交也一样），标记文件永远不会泄漏到上游。
