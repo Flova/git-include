@@ -4,9 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/flova/git-include/actions/workflows/ci.yml"><img src="https://github.com/flova/git-include/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/flova/git-include/releases/latest"><img src="https://img.shields.io/github/v/release/flova/git-include?include_prereleases&sort=semver" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/flova/git-include" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/rust-1.96+-orange?logo=rust" alt="MSRV 1.96">
   <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="unsafe forbidden">
 </p>
 
