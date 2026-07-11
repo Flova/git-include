@@ -437,7 +437,7 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
     meta.branch = target_branch.clone();
     meta.commit = tip.clone();
     meta.parent = Some(git.head()?);
-    meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
+    meta.cmdver = crate::gitrepo::CMDVER.to_string();
     meta.ref_kind_hint = Some(crate::git::RevKind::Branch);
     let subtree = git.tree_with_blob(&local, MARKER_FILE, meta.serialize().as_bytes())?;
     inc.commit_subtree(

@@ -801,6 +801,15 @@ fn operates_on_marker_written_by_git_subrepo() {
     include_ok(&host, &["pull", "vendor/lib"]);
     assert_eq!(read(&host, "vendor/lib/next.txt"), "n\n");
 
+    // Writing back namespaces cmdver, so it can't be mistaken for a
+    // git-subrepo version — but the value still reads cleanly via git config
+    // (exactly how git-subrepo parses it).
+    let cmdver = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.cmdver"],
+    );
+    assert_eq!(cmdver, format!("git-include/{}", env!("CARGO_PKG_VERSION")));
+
     commit_file(&host, "vendor/lib/ours.txt", "o\n", "our change");
     include_ok(&host, &["push", "vendor/lib"]);
     let clone = env.path("check");

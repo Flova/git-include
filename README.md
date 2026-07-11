@@ -402,7 +402,7 @@ Each included directory contains a `.gitrepo` file in git-subrepo's format:
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
 	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
-	cmdver = 0.1.0
+	cmdver = git-include/0.1.0
 ```
 
 Because the format, keys and semantics match git-subrepo, adopting
@@ -411,6 +411,12 @@ all: it operates on directories vendored with `git subrepo clone` as-is.
 The reverse direction works for branch-tracking includes, but note that
 git-subrepo has no notion of pinning to a tag or commit — an include
 using those features has no git-subrepo equivalent.
+
+The `cmdver` field records the tool that last wrote the marker.
+git-include namespaces its value (`git-include/<version>`) so it is never
+mistaken for a git-subrepo version number, while git-subrepo keeps writing
+its own bare version there — each tool reads and preserves the other's
+value untouched.
 
 ## Git LFS
 

@@ -278,10 +278,12 @@ $ git include pull vendor/widgets \
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
 	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
-	cmdver = 0.1.0
+	cmdver = git-include/0.1.0
 ```
 
 由于格式、字段名和语义都和 git-subrepo 一致，在一个已经使用 git-subrepo 的项目里引入 git-include 完全不需要迁移：它可以直接操作用 `git subrepo clone` 引入的目录。反过来的方向对于跟踪分支的引入同样适用，但要注意：git-subrepo 没有固定到标签或提交的概念——一个使用了这些功能的引入在 git-subrepo 里没有对应的东西。
+
+`cmdver` 字段记录的是最后写入该标记文件的工具。git-include 会给自己的值加上命名空间前缀（`git-include/<版本号>`），这样它就永远不会被误认为是 git-subrepo 的版本号；而 git-subrepo 仍然照常在这里写入它自己的裸版本号——两个工具都会原样读取并保留对方写入的值。
 
 ## Git LFS
 
