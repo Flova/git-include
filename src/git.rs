@@ -545,8 +545,9 @@ impl Git {
 
     /// Create a commit object with `tree`, the given parents (an empty
     /// slice makes a root commit, several make a merge), and the author +
-    /// message of `original` (committer is the configured user). No ref
-    /// moves.
+    /// message of `original` (committer is the configured user, recorded
+    /// "now" — the rewrite is genuinely happening now, even though the
+    /// authored change itself is not). No ref moves.
     pub fn replay_commit(&self, original: &str, tree: &str, parents: &[String]) -> Result<String> {
         let orig = self.repo.find_commit(Oid::from_str(original)?)?;
         let author = orig.author().to_owned();

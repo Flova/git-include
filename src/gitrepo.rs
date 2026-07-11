@@ -12,6 +12,14 @@ use anyhow::{Context, Result, bail};
 
 pub const MARKER_FILE: &str = ".gitrepo";
 
+/// The value git-include writes into the marker's `cmdver` field. The field
+/// is shared with git-subrepo, which writes its own bare version (e.g.
+/// `0.4.9`) there — so we namespace ours (`git-include/<version>`) to keep
+/// the two tools' version numbers from being mistaken for one another. This
+/// is safe: git-subrepo never parses `cmdver` as a version, it only stores
+/// and rewrites the string.
+pub const CMDVER: &str = concat!("git-include/", env!("CARGO_PKG_VERSION"));
+
 /// Parsed contents of a `.gitrepo` marker file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitRepoFile {
@@ -44,7 +52,7 @@ impl GitRepoFile {
             commit: commit.to_string(),
             parent: parent.map(str::to_string),
             method: "merge".to_string(),
-            cmdver: env!("CARGO_PKG_VERSION").to_string(),
+            cmdver: CMDVER.to_string(),
             ref_kind_hint: None,
         }
     }
@@ -156,6 +164,24 @@ mod tests {
         );
         let parsed = GitRepoFile::parse(&f.serialize()).unwrap();
         assert_eq!(f, parsed);
+    }
+
+    #[test]
+    fn cmdver_is_namespaced_but_foreign_values_are_preserved() {
+        // What git-include writes is namespaced, so it can never be mistaken
+        // for a git-subrepo version number.
+        let ours = GitRepoFile::new("r", "main", "abc", None);
+        assert!(
+            ours.cmdver.starts_with("git-include/"),
+            "cmdver must be namespaced, got: {}",
+            ours.cmdver
+        );
+        // A cmdver written by another tool is kept verbatim on read.
+        let foreign = GitRepoFile::parse(
+            "[subrepo]\n\tremote = r\n\tbranch = main\n\tcommit = abc\n\tcmdver = 0.4.9\n",
+        )
+        .unwrap();
+        assert_eq!(foreign.cmdver, "0.4.9");
     }
 
     #[test]

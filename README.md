@@ -2,7 +2,13 @@
   <img src="docs/banner.svg" alt="git-include" width="720">
 </p>
 
-**English** | **[中文](README.zh-CN.md)**
+<p align="center">
+  <b>English</b> | <a href="README.zh-CN.md">中文</a>
+  <br><br>
+  <a href="https://github.com/flova/git-include/actions/workflows/ci.yml"><img src="https://github.com/flova/git-include/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/flova/git-include" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="unsafe forbidden">
+</p>
 
 `git-include` is a modern, single-binary alternative to
 [git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
@@ -396,7 +402,7 @@ Each included directory contains a `.gitrepo` file in git-subrepo's format:
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
 	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
-	cmdver = 0.1.0
+	cmdver = git-include/0.1.0
 ```
 
 Because the format, keys and semantics match git-subrepo, adopting
@@ -405,6 +411,12 @@ all: it operates on directories vendored with `git subrepo clone` as-is.
 The reverse direction works for branch-tracking includes, but note that
 git-subrepo has no notion of pinning to a tag or commit — an include
 using those features has no git-subrepo equivalent.
+
+The `cmdver` field records the tool that last wrote the marker.
+git-include namespaces its value (`git-include/<version>`) so it is never
+mistaken for a git-subrepo version number, while git-subrepo keeps writing
+its own bare version there — each tool reads and preserves the other's
+value untouched.
 
 ## Git LFS
 

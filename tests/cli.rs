@@ -318,6 +318,43 @@ fn push_preserves_commit_authors() {
 }
 
 #[test]
+fn push_preserves_original_author_timestamp() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    std::fs::write(host.join("vendor/lib/timed.txt"), "hi\n").unwrap();
+    git_in(&host, &["add", "vendor/lib/timed.txt"]);
+    git_in(
+        &host,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "old change",
+            "--date=2020-03-15T09:00:00+00:00",
+        ],
+    );
+    // Compare the raw epoch (%at) rather than a formatted date: git's ISO
+    // rendering of a UTC offset varies by version (`+00:00` vs `Z`), so the
+    // epoch is the only version-stable equality to assert against.
+    let host_author_epoch = git_in(&host, &["log", "-1", "--format=%at"]);
+
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    let clone_author_epoch = git_in(&clone, &["log", "-1", "--format=%at", "main"]);
+    assert_eq!(
+        clone_author_epoch, host_author_epoch,
+        "the author timestamp must survive the rewrite unchanged"
+    );
+}
+
+#[test]
 fn push_with_nothing_to_push_is_a_noop() {
     let env = TestEnv::new();
     let (url, _up) = env.upstream("lib");
@@ -767,6 +804,15 @@ fn operates_on_marker_written_by_git_subrepo() {
     upstream_commit(&up_work, "next.txt", "n\n", "upstream next");
     include_ok(&host, &["pull", "vendor/lib"]);
     assert_eq!(read(&host, "vendor/lib/next.txt"), "n\n");
+
+    // Writing back namespaces cmdver, so it can't be mistaken for a
+    // git-subrepo version — but the value still reads cleanly via git config
+    // (exactly how git-subrepo parses it).
+    let cmdver = git_in(
+        &host,
+        &["config", "--file", "vendor/lib/.gitrepo", "subrepo.cmdver"],
+    );
+    assert_eq!(cmdver, format!("git-include/{}", env!("CARGO_PKG_VERSION")));
 
     commit_file(&host, "vendor/lib/ours.txt", "o\n", "our change");
     include_ok(&host, &["push", "vendor/lib"]);

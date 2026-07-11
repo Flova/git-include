@@ -111,7 +111,7 @@ pub fn sync(
     if opts.force || meta.parent.is_none() {
         meta.parent = Some(git.head()?);
     }
-    meta.cmdver = env!("CARGO_PKG_VERSION").to_string();
+    meta.cmdver = crate::gitrepo::CMDVER.to_string();
     meta.ref_kind_hint = Some(kind);
     let subtree = git.tree_with_blob(&merged_stripped, MARKER_FILE, meta.serialize().as_bytes())?;
 
