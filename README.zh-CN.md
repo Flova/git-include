@@ -2,6 +2,14 @@
   <img src="docs/banner.svg" alt="git-include" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/flova/git-include/actions/workflows/ci.yml"><img src="https://github.com/flova/git-include/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/flova/git-include/releases/latest"><img src="https://img.shields.io/github/v/release/flova/git-include?include_prereleases&sort=semver" alt="最新发布版"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/flova/git-include" alt="许可证：MIT"></a>
+  <img src="https://img.shields.io/badge/rust-1.96+-orange?logo=rust" alt="最低 Rust 版本 1.96">
+  <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="禁用 unsafe">
+</p>
+
 **[English](README.md)** | **中文**
 
 `git-include` 是 [git-subrepo](https://github.com/ingydotnet/git-subrepo) 的现代化单文件替代品，使用 Rust 编写。它会把一个上游仓库以子目录的形式引入到你的仓库中，再加上一个小小的标记文件。这就是它的全部模型：
