@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="git-include. Vendor external git repos as plain files, with full two-way sync." width="720">
+  <img src="docs/banner.svg" alt="git-include" width="720">
 </p>
-
-# git-include
 
 **Vendor external git repositories as plain files — with full two-way sync.**
 
