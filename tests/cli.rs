@@ -318,6 +318,39 @@ fn push_preserves_commit_authors() {
 }
 
 #[test]
+fn push_preserves_original_author_timestamp() {
+    let env = TestEnv::new();
+    let (url, _up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    std::fs::write(host.join("vendor/lib/timed.txt"), "hi\n").unwrap();
+    git_in(&host, &["add", "vendor/lib/timed.txt"]);
+    git_in(
+        &host,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "old change",
+            "--date=2020-03-15T09:00:00+00:00",
+        ],
+    );
+
+    include_ok(&host, &["push", "vendor/lib"]);
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    let author_date = git_in(&clone, &["log", "-1", "--format=%aI", "main"]);
+    assert_eq!(
+        author_date, "2020-03-15T09:00:00+00:00",
+        "the author timestamp must survive the rewrite unchanged, got: {author_date}"
+    );
+}
+
+#[test]
 fn push_with_nothing_to_push_is_a_noop() {
     let env = TestEnv::new();
     let (url, _up) = env.upstream("lib");
