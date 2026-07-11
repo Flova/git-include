@@ -1,6 +1,8 @@
-# git-include
+<p align="center">
+  <img src="docs/banner.svg" alt="git-include" width="720">
+</p>
 
-**Vendor external git repositories as plain files — with full two-way sync.**
+**English** | **[中文](README.zh-CN.md)**
 
 `git-include` is a modern, single-binary alternative to
 [git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
@@ -21,9 +23,8 @@ small marker file. That's the whole model:
 - **Export built in.** `git include init` turns any ordinary directory into
   a new included repository, extracting its full history from your commits —
   ready to push to its own (even empty) repository.
-- **First-class Git LFS support**, painless **branch switching**, quick
-  **status/diff against upstream**, **nested includes**, and **tab completion**
-  out of the box.
+- Painless **branch switching**, quick **status/diff against upstream**,
+  **nested includes**, and **tab completion** out of the box.
 
 ```console
 $ git include add https://github.com/example/widgets vendor/widgets
@@ -69,10 +70,13 @@ which upstream commit they correspond to. Everything else — merging, pushing,
 diffing — is derived from that.
 
 Compared to git-subrepo, git-include is a compiled binary (built on libgit2
-via the `git2` crate) instead of ~2000 lines of bash, and never creates
-temporary branches, worktrees, or clones in your repository: your branches
-and your working tree stay untouched except for the one subdirectory being
-operated on.
+via the `git2` crate) in Rust — a strongly typed language with compile-time
+guarantees — rather than bash, and never creates temporary branches,
+worktrees, or clones in your repository: your branches and your working
+tree stay untouched except for the one subdirectory being operated on.
+The CLI is more intuitive; pinning to a specific tag or commit (not
+just a branch) is supported, along with Git LFS and migrating existing
+submodules directly.
 
 ## Installation
 
@@ -556,6 +560,11 @@ $ pixi run lint               # rustfmt + clippy, exactly as CI runs them
 $ pixi run build              # release binary for your platform
 $ pixi run -e build conda-build   # build the conda package
 ```
+
+The test suite is extensive: it exercises two-way sync, nested includes,
+Git LFS, submodule migration, and edge cases like conflicting concurrent
+branches end-to-end against real git repositories, and runs in CI on
+every change.
 
 There is no separate toolchain setup — development, CI and releases all
 build through pixi. Releases are built by CI from a `v*` tag, entirely
