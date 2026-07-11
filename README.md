@@ -2,6 +2,8 @@
   <img src="docs/banner.svg" alt="git-include" width="720">
 </p>
 
+**English** | **[Deutsch](README.de.md)** | **[中文](README.zh-CN.md)**
+
 `git-include` is a modern, single-binary alternative to
 [git-subrepo](https://github.com/ingydotnet/git-subrepo), written in Rust. It
 inlines an upstream repository into a subdirectory of your repository, plus one
