@@ -72,9 +72,9 @@ via the `git2` crate) in Rust — a strongly typed language with compile-time
 guarantees — rather than bash, and never creates temporary branches,
 worktrees, or clones in your repository: your branches and your working
 tree stay untouched except for the one subdirectory being operated on.
-The CLI is more intuitive, with fewer commands and flags to remember;
-pinning to a specific tag or commit (not just a branch) is supported,
-along with Git LFS and migrating existing submodules directly.
+The CLI is more intuitive; pinning to a specific tag or commit (not
+just a branch) is supported, along with Git LFS and migrating existing
+submodules directly.
 
 ## Installation
 
