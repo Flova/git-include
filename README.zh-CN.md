@@ -2,7 +2,7 @@
   <img src="docs/banner.svg" alt="git-include" width="720">
 </p>
 
-**[English](README.md)** | **[Deutsch](README.de.md)** | **中文**
+**[English](README.md)** | **中文**
 
 `git-include` 是 [git-subrepo](https://github.com/ingydotnet/git-subrepo) 的现代化单文件替代品，使用 Rust 编写。它会把一个上游仓库以子目录的形式引入到你的仓库中，再加上一个小小的标记文件。这就是它的全部模型：
 
