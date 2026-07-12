@@ -109,7 +109,7 @@ macOS binaries use the system Security framework for TLS; OpenSSL is
 compiled in only for SSH support (macOS ships no OpenSSL to link
 against). You can also just grab the binary for your platform from the
 [releases page](https://github.com/flova/git-include/releases) directly. Pin a version
-with `GIT_INCLUDE_VERSION=v0.1.0`, change the directory with
+with `GIT_INCLUDE_VERSION=v0.1.2`, change the directory with
 `GIT_INCLUDE_BIN_DIR`. Update any time — the binary updates itself:
 
 ```console
@@ -402,7 +402,7 @@ Each included directory contains a `.gitrepo` file in git-subrepo's format:
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
 	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
-	cmdver = git-include/0.1.0
+	cmdver = git-include/0.1.2
 ```
 
 Because the format, keys and semantics match git-subrepo, adopting
