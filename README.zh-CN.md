@@ -81,7 +81,7 @@ $ git include self-update            # 或者 --version vX.Y.Z，或者用 -n �
 
 **Windows：** 从[最新发布版](https://github.com/flova/git-include/releases/latest)下载 MSI 安装包（x64）——它会安装 `git-include.exe` 并把它加入 `PATH`。在 ARM64 版 Windows 上，改为从发布版的附件里下载 `git-include-aarch64-pc-windows-msvc.exe`，然后自己把它加入 `PATH`。（`self-update` 在 Windows 上同样可用，两种架构都支持。）
 
-**Conda：** 每个发布版都会提供 linux-64、linux-aarch64、osx-arm64 和 win-64 的 `.conda` 包（见发布版的附件；配方文件在 `conda/recipe.yaml` 里）。目前没有预编译的 Intel Mac 包或二进制文件——Intel Mac 用户需要从源码编译（见下文）。Conda 构建的版本没有自我更新机制——在这种情况下更新是 conda 的职责（`conda update git-include`），`git include self-update` 也会相应地提示你，而不是去和包管理器打架。
+**Conda：** 从 [conda-forge](https://conda-forge.org) 安装，运行 `conda install -c conda-forge git-include`（支持 linux-64、linux-aarch64、osx-arm64 和 win-64）。目前没有预编译的 Intel Mac 包或二进制文件——Intel Mac 用户需要从源码编译（见下文）。Conda 构建的版本没有自我更新机制——在这种情况下更新是 conda 的职责（`conda update git-include`），`git include self-update` 也会相应地提示你，而不是去和包管理器打架。
 
 **从源码编译**（需要一个较新的 stable Rust；libgit2 是内置编译的，所以除了 Linux 上的 OpenSSL 之外没有其他系统依赖）：
 
@@ -372,13 +372,12 @@ Resolve the conflicts, then finish with:
 
 ## 开发
 
-开发和发布环境用 [pixi](https://pixi.sh) 固定——一条命令就能得到项目构建和测试所用的精确 Rust 工具链、git-lfs、C 编译器和 rattler-build（版本都锁定在 `pixi.lock` 里）：
+开发和发布环境用 [pixi](https://pixi.sh) 固定——一条命令就能得到项目构建和测试所用的精确 Rust 工具链、git-lfs 和 C 编译器（版本都锁定在 `pixi.lock` 里）：
 
 ```console
 $ pixi run test               # 完整测试套件，包含 LFS 往返测试
 $ pixi run lint               # rustfmt + clippy，和 CI 里跑的完全一样
 $ pixi run build              # 为你的平台构建发布版二进制文件
-$ pixi run -e build conda-build   # 构建 conda 包
 ```
 
 测试套件相当详尽：它端到端地针对真实的 git 仓库，测试了双向同步、嵌套引入、Git LFS、submodule 迁移，以及诸如并发分支冲突之类的边界情况，并且每次改动都会在 CI 中运行。

@@ -130,13 +130,13 @@ grab `git-include-aarch64-pc-windows-msvc.exe` from the release assets
 instead and place it on your `PATH`. (`self-update` works on Windows
 too, for both architectures.)
 
-**Conda:** every release ships `.conda` packages for linux-64,
-linux-aarch64, osx-arm64 and win-64 (see the release assets; the
-recipe lives in `conda/recipe.yaml`). There are no prebuilt Intel-Mac
-packages or binaries — Intel Mac users build from source (see below). Conda builds are compiled without
-the self-update mechanism — there, updating is conda's job
-(`conda update git-include`), and `git include self-update` says so
-instead of fighting the package manager.
+**Conda:** install from [conda-forge](https://conda-forge.org) with
+`conda install -c conda-forge git-include` (linux-64, linux-aarch64,
+osx-arm64 and win-64). There are no prebuilt Intel-Mac packages or
+binaries — Intel Mac users build from source (see below). Conda builds
+are compiled without the self-update mechanism — there, updating is
+conda's job (`conda update git-include`), and `git include self-update`
+says so instead of fighting the package manager.
 
 **From source** (needs a current stable Rust; libgit2 is vendored and
 compiled in, so there is no system dependency beyond OpenSSL on Linux):
@@ -563,14 +563,13 @@ helpers).
 
 The development and release environment is pinned with
 [pixi](https://pixi.sh) — one command gets you the exact Rust toolchain,
-git-lfs, C compiler and rattler-build the project is built and tested
-with (versions locked in `pixi.lock`):
+git-lfs and C compiler the project is built and tested with (versions
+locked in `pixi.lock`):
 
 ```console
 $ pixi run test               # full test suite, LFS round-trip included
 $ pixi run lint               # rustfmt + clippy, exactly as CI runs them
 $ pixi run build              # release binary for your platform
-$ pixi run -e build conda-build   # build the conda package
 ```
 
 The test suite is extensive: it exercises two-way sync, nested includes,
