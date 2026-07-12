@@ -3,7 +3,6 @@
 #   pixi run test        # full test suite (git-lfs included)
 #   pixi run lint        # rustfmt + clippy, as CI runs them
 #   pixi run build       # release binary for the host platform
-#   pixi run -e build conda-build   # build the conda package via rattler-build
 #
 # The single source of truth for the toolchain: development, CI and
 # releases all build through these environments — there is no separate
@@ -59,12 +58,6 @@ check-minimal = "cargo check --no-default-features"
 test = 'RUSTFLAGS="-C link-arg=-Wl,-rpath,$CONDA_PREFIX/lib" cargo test'
 build = 'RUSTFLAGS="-C link-arg=-Wl,-rpath,$CONDA_PREFIX/lib" cargo build --release'
 
-[feature.build.dependencies]
-rattler-build = ">=0.40"
-
-[feature.build.tasks]
-conda-build = "rattler-build build --recipe conda/recipe.yaml --output-dir dist"
-
 # ---- release binaries (the `dist` environment) --------------------------
 # Everything the release workflow builds with, pinned through pixi. The
 # conda toolchain's old sysroot keeps the glibc floor at 2.28 (matching
@@ -98,5 +91,4 @@ dist-msi = "cargo wix --nocapture --install-version $MSI_VERSION --output dist/g
 dist = "cargo build --release --target aarch64-pc-windows-msvc"
 
 [environments]
-build = { features = ["build"], no-default-feature = true }
 dist = { features = ["dist"] }

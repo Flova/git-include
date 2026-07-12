@@ -120,44 +120,15 @@ jobs:
           path: dist/*.msi
           if-no-files-found: error
 
-  conda:
-    name: Conda package (${{ matrix.platform }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # No osx-64: macos-13 (Intel) runners take forever to schedule.
-          - { platform: linux-64,      os: ubuntu-latest }
-          - { platform: linux-aarch64, os: ubuntu-24.04-arm }
-          - { platform: osx-arm64,     os: macos-latest }
-          - { platform: win-64,        os: windows-latest }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.1
-        with:
-          pixi-version: v0.72.2
-          environments: build
-          cache: true
-      - name: Build conda package
-        run: pixi run -e build conda-build --target-platform ${{ matrix.platform }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: conda-${{ matrix.platform }}
-          path: dist/**/*.conda
-          if-no-files-found: error
-
   publish:
     name: Collect artifacts & publish
-    needs: [binaries, msi, conda]
+    needs: [binaries, msi]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: assets
           merge-multiple: true
-      - name: Collect conda packages at top level
-        run: find assets -name '*.conda' -exec mv {} assets/ \; || true
       - name: Generate SHA256SUMS
         run: |
           cd assets
@@ -175,15 +146,5 @@ jobs:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
           files: |
             assets/git-include-*
-            assets/*.conda
             assets/SHA256SUMS
           generate_release_notes: true
-      # Optional: publish the conda package to an anaconda.org channel when
-      # a token is configured (Settings -> Secrets -> ANACONDA_API_TOKEN).
-      - name: Upload to anaconda.org
-        if: ${{ (github.ref_type == 'tag' || inputs.tag != '') && env.ANACONDA_API_TOKEN != '' }}
-        env:
-          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
-        run: |
-          pipx install anaconda-client
-          anaconda -t "$ANACONDA_API_TOKEN" upload --force assets/*.conda
