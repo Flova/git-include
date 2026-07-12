@@ -217,6 +217,18 @@
   var btn = document.getElementById("dlbtn");
   var sel = document.getElementById("dlsel");
 
+  // Fill the version stamp from the latest GitHub release. Falls back to the
+  // value baked into the HTML if the request fails or is rate-limited.
+  var stamp = document.getElementById("stamp");
+  if (stamp) {
+    fetch("https://api.github.com/repos/flova/git-include/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" }
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d && d.tag_name) stamp.textContent = d.tag_name; })
+      .catch(function () {});
+  }
+
   function apply(v) {
     sel.value = v;
     if (!v) {

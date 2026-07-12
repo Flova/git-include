@@ -69,7 +69,7 @@ $ curl -fsSL https://raw.githubusercontent.com/flova/git-include/main/install.sh
 - `*-linux-gnu` —— 动态链接到发行版自带的 OpenSSL 和 zlib，不打包任何东西。系统兼容时优先使用这个版本。
 - `*-linux-gnu-portable` —— **内置编译**了 OpenSSL 和 zlib，只需要 glibc ≥ 2.28（2018 年发布），因此可以在老旧发行版和没有 libssl 的精简容器镜像上运行。（像 Alpine 这样基于 musl 的发行版需要从源码编译——见下文。）
 
-macOS 上的二进制文件使用系统自带的 Security 框架来处理 TLS；只有 SSH 支持部分内置编译了 OpenSSL（因为 macOS 没有自带可供链接的 OpenSSL）。你也可以直接从[发布页面](https://github.com/flova/git-include/releases)下载对应平台的二进制文件。用 `GIT_INCLUDE_VERSION=v0.1.2` 固定版本，用 `GIT_INCLUDE_BIN_DIR` 修改安装目录。随时可以更新——这个二进制文件会自我更新：
+macOS 上的二进制文件使用系统自带的 Security 框架来处理 TLS；只有 SSH 支持部分内置编译了 OpenSSL（因为 macOS 没有自带可供链接的 OpenSSL）。你也可以直接从[发布页面](https://github.com/flova/git-include/releases)下载对应平台的二进制文件。用 `GIT_INCLUDE_VERSION=vX.Y.Z` 固定版本，用 `GIT_INCLUDE_BIN_DIR` 修改安装目录。随时可以更新——这个二进制文件会自我更新：
 
 ```console
 $ git include self-update            # 或者 --version vX.Y.Z，或者用 -n 预览
@@ -278,7 +278,7 @@ $ git include pull vendor/widgets \
 	commit = 1a2b3c4d...   ; upstream commit the directory was last synced to
 	parent = 9z8y7x6w...   ; last host commit whose changes are already upstream
 	method = merge
-	cmdver = git-include/0.1.2
+	cmdver = git-include/X.Y.Z
 ```
 
 由于格式、字段名和语义都和 git-subrepo 一致，在一个已经使用 git-subrepo 的项目里引入 git-include 完全不需要迁移：它可以直接操作用 `git subrepo clone` 引入的目录。反过来的方向对于跟踪分支的引入同样适用，但要注意：git-subrepo 没有固定到标签或提交的概念——一个使用了这些功能的引入在 git-subrepo 里没有对应的东西。
