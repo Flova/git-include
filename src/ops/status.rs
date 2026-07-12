@@ -91,5 +91,9 @@ pub fn count_unpushed(inc: &Include<'_>) -> Result<usize> {
         return Ok(0);
     }
     let plan = plan_replay(inc, &inc.meta.commit)?;
-    Ok(plan.steps.len())
+    // The commits push would actually add: those the rebuilt tip has that
+    // the upstream head does not. Commits an intervening pull already folded
+    // into upstream (their content is now identical to upstream) are not in
+    // this range, so they are not miscounted as "to push".
+    git.count_range(&inc.meta.commit, &plan.tip)
 }
