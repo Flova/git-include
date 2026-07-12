@@ -109,16 +109,20 @@ pub fn plan_replay(inc: &Include<'_>, start_commit: &str) -> Result<ReplayPlan> 
             }
         }
 
-        // Unchanged against the sole surviving parent: the commit did not
-        // touch the directory (or is a merge that collapsed once the legs
-        // it joined were pruned) — it needs no image of its own.
-        if parents.len() == 1
-            && git
-                .rev_parse(&format!("{}^{{tree}}", parents[0]))
-                .as_deref()
-                == Some(tree.as_str())
-        {
-            images.insert(commit, parents.pop());
+        // Empty against the first surviving parent: the commit adds nothing
+        // to that parent's image — it did not touch the directory, or it is
+        // a merge whose extra legs brought no new content (a `pull` whose
+        // local side already had everything, or a host merge that discarded
+        // a branch's edits). Collapse it onto that parent instead of
+        // contributing a redundant commit, as long as dropping the other
+        // legs does not strand the upstream head: doing so would stop the
+        // push being a fast-forward, so those load-bearing merges are kept.
+        let empty_here = parents.first().is_some_and(|first| {
+            git.rev_parse(&format!("{first}^{{tree}}")).as_deref() == Some(tree.as_str())
+        });
+        if empty_here && collapse_keeps_fast_forward(git, start_commit, &parents) {
+            let image = parents.swap_remove(0);
+            images.insert(commit, Some(image));
             continue;
         }
 
@@ -192,6 +196,16 @@ fn marker_meta_at(inc: &Include<'_>, rev: &str) -> Option<GitRepoFile> {
     let blob = git.rev_parse(&format!("{rev}:{}/{MARKER_FILE}", inc.subdir))?;
     let blob = git.repo.find_blob(git2::Oid::from_str(&blob).ok()?).ok()?;
     GitRepoFile::parse(&String::from_utf8_lossy(blob.content())).ok()
+}
+
+/// Would collapsing an empty commit onto `parents[0]` (dropping the other
+/// parents) keep the push a fast-forward of `up_head`, the upstream commit
+/// it must build on? Safe when the head is already reachable from the kept
+/// parent, or is not carried by any dropped parent — otherwise the dropped
+/// leg is the only route to the upstream head and the merge must stay.
+fn collapse_keeps_fast_forward(git: &Git, up_head: &str, parents: &[String]) -> bool {
+    let reaches = |c: &str| c == up_head || git.is_descendant_of(c, up_head);
+    reaches(&parents[0]) || !parents[1..].iter().any(|p| reaches(p))
 }
 
 /// Drop parents that are ancestors of another parent: merges whose other
@@ -335,7 +349,6 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
 
     // Build the new upstream history.
     let mut tip = inc.meta.commit.clone();
-    let mut replayed = 0usize;
     if squash {
         let tip_tree = git
             .rev_parse(&format!("{tip}^{{tree}}"))
@@ -349,45 +362,29 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
                     git.commit_summary(commit)
                 ));
             }
-            if dry_run {
-                println!("would push: 1 squashed commit");
-            }
             tip = git.new_commit(&local, &tip, msg.trim_end())?;
-            replayed = 1;
         }
     } else {
         // The plan already built the rebuilt history (cheap unreferenced
-        // objects, gc-able — a dry run builds them too, identical to a
-        // real push); this only publishes its head.
-        if dry_run {
-            for (commit, _) in &plan.steps {
-                println!(
-                    "would push: {} {}",
-                    short(commit),
-                    git.commit_summary(commit)
-                );
-            }
-        }
+        // objects, gc-able — a dry run builds them too, identical to a real
+        // push); this only publishes its head.
         tip = plan.tip.clone();
-        replayed = if tip == inc.meta.commit {
-            0
-        } else {
-            plan.steps.len()
-        };
         // Safety net: by construction the rebuilt head carries exactly the
         // current directory content; reconcile any drift in one commit.
         let tip_tree = git
             .rev_parse(&format!("{tip}^{{tree}}"))
             .context("replay tip has no tree")?;
         if local != tip_tree {
-            if dry_run {
-                println!("would push: 1 combined commit for the remaining changes");
-            }
             let msg = format!("git include push {subdir}\n\nReconcile local content.");
             tip = git.new_commit(&local, &tip, &msg)?;
-            replayed += 1;
         }
     }
+
+    // What push actually contributes: the commits the rebuilt tip has that
+    // the upstream head does not. Commits an intervening pull already folded
+    // into upstream, and empty commits collapsed during the replay, are not
+    // in this range — so this is the true count, and what `status` reports.
+    let replayed = git.count_range(&inc.meta.commit, &tip)?;
 
     if replayed == 0 && upstream.is_some() {
         if elsewhere {
@@ -404,6 +401,13 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
         return Ok(());
     }
     if dry_run {
+        for image in git.walk_range(&inc.meta.commit, &tip)? {
+            println!(
+                "would push: {} {}",
+                short(&image),
+                git.commit_summary(&image)
+            );
+        }
         println!(
             "dry run: {replayed} commit(s) would be pushed to {target_remote} ({target_branch})."
         );

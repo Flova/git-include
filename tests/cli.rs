@@ -458,6 +458,122 @@ fn push_preserves_individual_commits_across_pulls() {
 }
 
 #[test]
+fn pull_that_lands_on_upstream_leaves_nothing_to_push() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Two local commits build a file up to a certain content...
+    commit_file(&host, "vendor/lib/f.txt", "base\nX\n", "local add X");
+    commit_file(&host, "vendor/lib/f.txt", "base\nX\nY\n", "local add Y");
+    // ...and upstream independently arrives at the *same* content.
+    upstream_commit(&up_work, "f.txt", "base\nX\n", "upstream add X");
+    upstream_commit(&up_work, "f.txt", "base\nX\nY\n", "upstream add Y");
+
+    // The pull merges cleanly; the directory is now byte-for-byte identical
+    // to upstream, so the local commits have been folded into it.
+    include_ok(&host, &["pull", "vendor/lib"]);
+
+    // There is genuinely nothing left to contribute. status must not report
+    // phantom "commit(s) to push", and it must agree with what push does.
+    let s = include_ok(&host, &["status", "vendor/lib"]);
+    assert!(s.contains("local:    clean"), "got: {s}");
+    assert!(!s.contains("to push"), "got: {s}");
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("no local changes to push"), "got: {out}");
+}
+
+#[test]
+fn push_drops_a_merge_that_discards_a_branch() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    upstream_commit(&up_work, "f.txt", "v1\n", "seed f.txt");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // A feature branch rewrites a file in the directory...
+    git_in(&host, &["checkout", "-q", "-b", "feature"]);
+    commit_file(&host, "vendor/lib/f.txt", "feature\n", "feature edit");
+    // ...while main rewrites the same file differently...
+    git_in(&host, &["checkout", "-q", "main"]);
+    commit_file(&host, "vendor/lib/f.txt", "main\n", "main edit");
+    // ...and the merge keeps main's version, discarding the feature edit.
+    git_in(
+        &host,
+        &[
+            "merge",
+            "--no-ff",
+            "-X",
+            "ours",
+            "-m",
+            "merge feature",
+            "feature",
+        ],
+    );
+    assert_eq!(read(&host, "vendor/lib/f.txt"), "main\n");
+
+    // The merge adds nothing over main, so upstream gets a single linear
+    // commit — no empty merge, no trace of the discarded branch.
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed 1 commit(s)"), "got: {out}");
+
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    assert_eq!(read(&clone, "f.txt"), "main\n");
+    assert_eq!(
+        git_in(&clone, &["rev-list", "--merges", "--count", "main"]),
+        "0",
+        "no merge commit expected upstream"
+    );
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert!(
+        !log.contains("feature edit"),
+        "discarded branch must not reach upstream: {log}"
+    );
+}
+
+#[test]
+fn push_keeps_a_merge_needed_to_stay_a_fast_forward() {
+    let env = TestEnv::new();
+    let (url, up_work) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+
+    // Unpushed local work in the directory.
+    commit_file(&host, "vendor/lib/f.txt", "local\n", "local edit");
+    // Upstream advances with a commit that changes no content (empty and
+    // no-op merge commits are common on real upstreams).
+    git_in(
+        &up_work,
+        &["commit", "-q", "--allow-empty", "-m", "empty upstream"],
+    );
+    git_in(&up_work, &["push", "-q", "origin", "main"]);
+
+    // The pull merges local work over the content-empty upstream advance.
+    // That merge is empty against its local parent, but dropping it would
+    // strand upstream's new commit and make the push a non-fast-forward, so
+    // it must be kept.
+    include_ok(&host, &["pull", "vendor/lib"]);
+    let out = include_ok(&host, &["push", "vendor/lib"]);
+    assert!(out.contains("Pushed"), "push should succeed: {out}");
+
+    let clone = env.path("check");
+    git_in(
+        env.root.path(),
+        &["clone", "-q", &url, clone.to_str().unwrap()],
+    );
+    // Local work reached upstream and the upstream commit was preserved (the
+    // push stayed a fast-forward).
+    assert_eq!(read(&clone, "f.txt"), "local\n");
+    let log = git_in(&clone, &["log", "--format=%s", "main"]);
+    assert!(log.contains("empty upstream"), "got: {log}");
+}
+
+#[test]
 fn push_squash_flattens_local_commits() {
     let env = TestEnv::new();
     let (url, _up) = env.upstream("lib");
