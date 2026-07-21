@@ -6,18 +6,23 @@
 //! API, so the (optional, best-effort) LFS integration shells out to it.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use auth_git2::GitAuthenticator;
 use git2::build::CheckoutBuilder;
 use git2::{
-    AutotagOption, Cred, CredentialType, Direction, FetchOptions, IndexEntry, IndexTime,
-    MergeOptions, Oid, ProxyOptions, PushOptions, RemoteCallbacks, Repository, Sort, StatusOptions,
+    AutotagOption, Config, Direction, FetchOptions, IndexEntry, IndexTime, MergeOptions, Oid,
+    ProxyOptions, PushOptions, RemoteCallbacks, Repository, Sort, StatusOptions,
 };
 
 /// A handle to the host repository.
 pub struct Git {
     pub repo: Repository,
     pub toplevel: PathBuf,
+    /// Snapshot of the repo/global/system config, used by the credential
+    /// helper when authenticating to remotes.
+    git_config: Config,
 }
 
 /// What kind of upstream revision an include tracks.
@@ -59,7 +64,14 @@ impl Git {
             .workdir()
             .context("this repository has no working tree (bare repository?)")?
             .to_path_buf();
-        Ok(Git { repo, toplevel })
+        // Snapshot the effective config once (repo + global + system), so the
+        // credential helper sees the same settings git would.
+        let git_config = repo.config().or_else(|_| Config::open_default())?;
+        Ok(Git {
+            repo,
+            toplevel,
+            git_config,
+        })
     }
 
     // ------------------------------------------------------------ basics --
@@ -187,25 +199,31 @@ impl Git {
 
     // ----------------------------------------------------------- remotes --
 
-    /// Credential chain: ssh-agent, then git's credential helpers, then
-    /// default (e.g. negotiate) — the standard setup used by cargo & co.
-    fn callbacks(&self) -> RemoteCallbacks<'_> {
-        let config = self.repo.config().ok();
+    /// Build an authenticator for a single fetch/push. `auth-git2` gives us
+    /// the same credential chain the git CLI reaches for: the ssh-agent,
+    /// on-disk SSH keys (default locations, with passphrase prompts), the
+    /// git credential helper for HTTPS, and a terminal prompt as a last
+    /// resort (skipped when there is no TTY, so it never hangs in a script).
+    ///
+    /// libssh2 does not read `~/.ssh/config`, so for SSH remotes we ask
+    /// OpenSSH itself (`ssh -G`) which identity files apply to the host and
+    /// add those too — this is best-effort and silently does nothing when
+    /// `ssh` is unavailable or the URL is not SSH.
+    fn authenticator(url: Option<&str>) -> GitAuthenticator {
+        let mut auth = GitAuthenticator::default();
+        if let Some(url) = url {
+            for key in resolve_ssh_identity_files(url) {
+                auth = auth.add_ssh_key_from_file(key, None);
+            }
+        }
+        auth
+    }
+
+    /// Remote callbacks wired to `auth` for credentials. `auth` must outlive
+    /// the returned callbacks (it carries the per-operation retry state).
+    fn callbacks<'a>(&'a self, auth: &'a GitAuthenticator) -> RemoteCallbacks<'a> {
         let mut cb = RemoteCallbacks::new();
-        cb.credentials(move |url, username, allowed| {
-            if allowed.contains(CredentialType::USERNAME) {
-                return Cred::username(username.unwrap_or("git"));
-            }
-            if allowed.contains(CredentialType::SSH_KEY) {
-                return Cred::ssh_key_from_agent(username.unwrap_or("git"));
-            }
-            if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
-                && let Some(cfg) = &config
-            {
-                return Cred::credential_helper(cfg, url, username);
-            }
-            Cred::default()
-        });
+        cb.credentials(auth.credentials(&self.git_config));
         cb
     }
 
@@ -222,7 +240,8 @@ impl Git {
     /// Ask the remote which branch its HEAD points at.
     pub fn remote_default_branch(&self, remote: &str) -> Result<String> {
         let mut r = self.open_remote(remote)?;
-        r.connect_auth(Direction::Fetch, Some(self.callbacks()), None)
+        let auth = Self::authenticator(r.url().ok());
+        r.connect_auth(Direction::Fetch, Some(self.callbacks(&auth)), None)
             .with_context(|| format!("could not connect to {remote}"))?;
         let buf = r.default_branch().with_context(|| {
             format!("could not determine the default branch of {remote}; pass --branch explicitly")
@@ -237,7 +256,8 @@ impl Git {
     /// List the branch and tag heads a remote advertises.
     pub fn remote_refs(&self, remote: &str) -> Result<RemoteRefs> {
         let mut r = self.open_remote(remote)?;
-        r.connect_auth(Direction::Fetch, Some(self.callbacks()), None)
+        let auth = Self::authenticator(r.url().ok());
+        r.connect_auth(Direction::Fetch, Some(self.callbacks(&auth)), None)
             .with_context(|| format!("could not connect to {remote}"))?;
         let mut branches = Vec::new();
         let mut tags: Vec<(String, String)> = Vec::new();
@@ -265,11 +285,11 @@ impl Git {
         Ok(RemoteRefs { branches, tags })
     }
 
-    fn fetch_options(&self) -> FetchOptions<'_> {
+    fn fetch_options<'a>(&'a self, auth: &'a GitAuthenticator) -> FetchOptions<'a> {
         let mut proxy = ProxyOptions::new();
         proxy.auto();
         let mut fo = FetchOptions::new();
-        fo.remote_callbacks(self.callbacks())
+        fo.remote_callbacks(self.callbacks(auth))
             .proxy_options(proxy)
             .download_tags(AutotagOption::None);
         fo
@@ -277,8 +297,9 @@ impl Git {
 
     fn fetch_refspecs(&self, remote: &str, refspecs: &[String]) -> Result<()> {
         let mut r = self.open_remote(remote)?;
+        let auth = Self::authenticator(r.url().ok());
         let specs: Vec<&str> = refspecs.iter().map(String::as_str).collect();
-        r.fetch(&specs, Some(&mut self.fetch_options()), None)
+        r.fetch(&specs, Some(&mut self.fetch_options(&auth)), None)
             .with_context(|| format!("could not fetch from {remote}"))?;
         Ok(())
     }
@@ -371,7 +392,8 @@ impl Git {
     /// fine; callers re-check object presence afterwards.
     pub fn try_fetch_commit(&self, remote: &str, oid: &str) {
         if let Ok(mut r) = self.open_remote(remote) {
-            let _ = r.fetch(&[oid], Some(&mut self.fetch_options()), None);
+            let auth = Self::authenticator(r.url().ok());
+            let _ = r.fetch(&[oid], Some(&mut self.fetch_options(&auth)), None);
         }
     }
 
@@ -384,9 +406,11 @@ impl Git {
             self.repo
                 .reference(&tmp_name, Oid::from_str(commit)?, true, "git-include push")?;
         let result = (|| -> Result<()> {
+            let mut r = self.open_remote(remote)?;
+            let auth = Self::authenticator(r.url().ok());
             let mut rejection: Option<String> = None;
             {
-                let mut cb = self.callbacks();
+                let mut cb = self.callbacks(&auth);
                 cb.push_update_reference(|refname, status| {
                     if let Some(msg) = status {
                         rejection = Some(format!("{refname}: {msg}"));
@@ -397,7 +421,6 @@ impl Git {
                 proxy.auto();
                 let mut po = PushOptions::new();
                 po.remote_callbacks(cb).proxy_options(proxy);
-                let mut r = self.open_remote(remote)?;
                 let refspec = format!("{tmp_name}:refs/heads/{branch}");
                 r.push(&[&refspec], Some(&mut po))
                     .with_context(|| format!("failed to push to {remote} ({branch})"))?;
@@ -713,4 +736,123 @@ fn prune_empty_dirs(dir: &Path) {
     }
     // remove_dir only succeeds on empty directories.
     let _ = std::fs::remove_dir(dir);
+}
+
+/// Ask OpenSSH which identity files apply to the host in `url`, so we try the
+/// same keys `git` would (libssh2 never reads `~/.ssh/config` itself). Runs
+/// `ssh -G <host>` and returns the `IdentityFile` entries that exist on disk.
+///
+/// Entirely best-effort: returns an empty list for non-SSH URLs, when `ssh`
+/// is not installed, or when the lookup fails for any reason.
+fn resolve_ssh_identity_files(url: &str) -> Vec<PathBuf> {
+    let Some((user, host, port)) = ssh_destination(url) else {
+        return Vec::new();
+    };
+    let dest = match &user {
+        Some(u) => format!("{u}@{host}"),
+        None => host,
+    };
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-G");
+    if let Some(port) = port {
+        cmd.args(["-p", &port.to_string()]);
+    }
+    cmd.arg(&dest);
+    let Ok(output) = cmd.output() else {
+        return Vec::new(); // ssh missing or not runnable: fall back to defaults
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        // `ssh -G` prints resolved config with lowercased keys, one per line.
+        .filter_map(|line| line.strip_prefix("identityfile "))
+        .map(|path| expand_tilde(path.trim()))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+/// Extract `(user, host, port)` from an SSH remote URL, or `None` if the URL
+/// is not SSH (HTTPS, git://, a local path, …). Handles both `ssh://` URLs
+/// and the scp-like `[user@]host:path` form.
+fn ssh_destination(url: &str) -> Option<(Option<String>, String, Option<u16>)> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let authority = rest.split('/').next().unwrap_or(rest);
+        let (user, hostport) = match authority.split_once('@') {
+            Some((u, hp)) => (Some(u.to_string()), hp),
+            None => (None, authority),
+        };
+        let (host, port) = match hostport.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse().ok()),
+            None => (hostport, None),
+        };
+        return (!host.is_empty()).then(|| (user, host.to_string(), port));
+    }
+    // Any other explicit scheme (https, git, file, …) is not SSH.
+    if url.contains("://") {
+        return None;
+    }
+    // scp-like: `[user@]host:path`. The colon must come before any slash,
+    // otherwise this is a local path (e.g. `/tmp/a:b`).
+    let (authority, path) = url.split_once(':')?;
+    if authority.is_empty() || authority.contains('/') || path.is_empty() {
+        return None;
+    }
+    let (user, host) = match authority.split_once('@') {
+        Some((u, h)) => (Some(u.to_string()), h),
+        None => (None, authority),
+    };
+    (!host.is_empty()).then(|| (user, host.to_string(), None))
+}
+
+/// Expand a leading `~/` against `$HOME`; leave any other path untouched.
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return Path::new(&home).join(rest);
+    }
+    PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ssh_destination;
+
+    #[test]
+    fn ssh_urls_are_recognized() {
+        // scp-like syntax
+        assert_eq!(
+            ssh_destination("git@gitlab.example.com:group/repo.git"),
+            Some((Some("git".into()), "gitlab.example.com".into(), None))
+        );
+        // scp-like without an explicit user
+        assert_eq!(
+            ssh_destination("gitlab.example.com:group/repo.git"),
+            Some((None, "gitlab.example.com".into(), None))
+        );
+        // ssh:// with user and port
+        assert_eq!(
+            ssh_destination("ssh://git@gitlab.example.com:2222/group/repo.git"),
+            Some((Some("git".into()), "gitlab.example.com".into(), Some(2222)))
+        );
+        // ssh:// without user or port
+        assert_eq!(
+            ssh_destination("ssh://gitlab.example.com/group/repo.git"),
+            Some((None, "gitlab.example.com".into(), None))
+        );
+    }
+
+    #[test]
+    fn non_ssh_urls_are_rejected() {
+        // Other schemes are not SSH.
+        assert_eq!(ssh_destination("https://gitlab.example.com/g/r.git"), None);
+        assert_eq!(ssh_destination("git://gitlab.example.com/g/r.git"), None);
+        assert_eq!(ssh_destination("file:///srv/repos/r.git"), None);
+        // Local paths: a colon only after a slash is a path, not host:path.
+        assert_eq!(ssh_destination("/srv/repos/r.git"), None);
+        assert_eq!(ssh_destination("../sibling/repo"), None);
+        assert_eq!(ssh_destination("/tmp/weird:name/repo"), None);
+    }
 }
