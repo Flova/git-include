@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "git-include"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "auth-git2",
