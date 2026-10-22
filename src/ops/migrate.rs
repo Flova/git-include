@@ -78,7 +78,7 @@ fn migrate_one(git: &Git, sub: &Submodule, message: Option<&str>, no_lfs: bool) 
         &sub.url,
         &recorded,
         Some(RevKind::Commit),
-        &pin_ref(&sub.path),
+        &pin_ref(&sub.url, &recorded),
     )?;
 
     let mut meta = GitRepoFile::new(&sub.url, &commit, &commit, Some(&head));

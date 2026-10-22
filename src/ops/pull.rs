@@ -4,7 +4,7 @@ use crate::git::{Git, RevKind};
 use crate::gitrepo::MARKER_FILE;
 use crate::lfs;
 use crate::ops::{Include, commit_message, find_all_includes};
-use crate::util::short;
+use crate::util::{pin_ref, short};
 
 pub struct PullOptions<'a> {
     pub force: bool,
@@ -61,7 +61,7 @@ pub fn sync(
     let rev = new_rev.unwrap_or(&inc.meta.branch).to_string();
     let remote = opts.remote.unwrap_or(&inc.meta.remote).to_string();
     eprintln!("Fetching {remote} ({rev}) ...");
-    let (upstream, kind) = git.fetch_rev(&remote, &rev, expect, &inc.pin_ref())?;
+    let (upstream, kind) = git.fetch_rev(&remote, &rev, expect, &pin_ref(&remote, &rev))?;
 
     let upstream_tree = git
         .rev_parse(&format!("{upstream}^{{tree}}"))

@@ -54,42 +54,67 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Prefix of the refs that pin fetched upstream commits (see [`pin_ref`]).
+pub const PIN_REF_PREFIX: &str = "refs/include/upstream/";
+
 /// Ref under which fetched upstream commits are pinned, so they survive
 /// `git gc` and enable offline `status`/`diff`.
 ///
-/// The subdirectory is flattened into a single ref component ('/' becomes
-/// "--"): a ref hierarchy would make the pin of an include collide with
-/// the pin of an include nested inside it — a loose ref cannot be both a
-/// file and a parent directory.
-pub fn pin_ref(subdir: &str) -> String {
-    let sanitized: String = subdir
+/// The ref holds "the latest known commit of `rev` on `remote`", so it is
+/// keyed by exactly that, not by the include's directory: moving an
+/// include keeps its pin, and a directory reused for another upstream (or
+/// tracking another branch on another host branch) can never read a stale
+/// pin. Includes tracking the same remote and rev share one ref, which is
+/// correct since they share the upstream head.
+///
+/// The name is the repository's last path component (for readability in
+/// `git for-each-ref`) plus a hash of remote and rev (for uniqueness).
+pub fn pin_ref(remote: &str, rev: &str) -> String {
+    let key = format!("{remote}\0{rev}");
+    let hash = git2::Oid::hash_object(git2::ObjectType::Blob, key.as_bytes())
+        .map(|oid| oid.to_string())
+        .unwrap_or_default();
+    format!(
+        "{PIN_REF_PREFIX}{}-{}",
+        repo_name(remote),
+        short_hash(&hash)
+    )
+}
+
+fn short_hash(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
+}
+
+/// The last path component of a remote URL (or path), without `.git`,
+/// sanitized into a valid single ref component.
+fn repo_name(remote: &str) -> String {
+    let last = remote
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\', ':'])
+        .next()
+        .unwrap_or_default();
+    let last = last.strip_suffix(".git").unwrap_or(last);
+    let mut name: String = last
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_' || c == '.' {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
                 c
             } else {
                 '-'
             }
         })
         .collect();
-    let mut name = sanitized
-        .trim_matches('/')
-        .split('/')
-        .filter(|c| !c.is_empty())
-        .collect::<Vec<_>>()
-        .join("--");
-    // Git ref-name rules: no "..", no leading '.', no trailing '.' or
-    // '.lock' (libgit2 rejects such refs outright).
+    // Git ref-name rules: no "..", no leading '.'. (A trailing '.' or
+    // ".lock" cannot occur: the hash suffix always follows.)
     while name.contains("..") {
         name = name.replace("..", "-.");
     }
-    if name.starts_with('.') {
-        name.insert(0, '-');
+    let name = name.trim_start_matches('.');
+    if name.is_empty() {
+        "repo".to_string()
+    } else {
+        name.to_string()
     }
-    if name.ends_with('.') || name.ends_with(".lock") {
-        name.push('-');
-    }
-    format!("refs/include/{name}")
 }
 
 pub fn short(sha: &str) -> &str {
@@ -98,29 +123,38 @@ pub fn short(sha: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{pin_ref, short};
+    use super::{PIN_REF_PREFIX, pin_ref, short};
 
     #[test]
-    fn pin_refs_are_valid_and_stable() {
-        assert_eq!(pin_ref("vendor/lib"), "refs/include/vendor--lib");
-        assert_eq!(pin_ref("with space"), "refs/include/with-space");
-        assert_eq!(pin_ref("weird~^:name"), "refs/include/weird---name");
-        assert_eq!(
-            pin_ref("/leading/trailing/"),
-            "refs/include/leading--trailing"
-        );
-        assert_eq!(pin_ref(".hidden"), "refs/include/-.hidden");
-        assert_eq!(pin_ref("foo.lock"), "refs/include/foo.lock-");
-        assert_eq!(pin_ref("a..b"), "refs/include/a-.b");
+    fn pin_refs_are_readable_and_valid() {
+        for (remote, name) in [
+            ("https://github.com/acme/widgets.git", "widgets"),
+            ("git@gitlab.example.com:team/lib", "lib"),
+            ("ssh://host/srv/repo.git/", "repo"),
+            ("/abs/path/my repo", "my-repo"),
+            ("C:\\repos\\win.git", "win"),
+            ("../..hidden", "-.hidden"),
+            ("https://host/", "host"),
+            ("", "repo"),
+        ] {
+            let r = pin_ref(remote, "main");
+            let rest = r.strip_prefix(PIN_REF_PREFIX).unwrap();
+            assert_eq!(rest.rsplit_once('-').unwrap().0, name, "{remote}");
+            assert!(git2::Reference::is_valid_name(&r), "{r}");
+        }
     }
 
     #[test]
-    fn nested_include_pins_do_not_collide_with_their_parent() {
-        // "refs/include/a" as a loose ref would block "refs/include/a/b"
-        // from ever being created; the flattened names have no hierarchy.
-        let outer = pin_ref("libs/b");
-        let nested = pin_ref("libs/b/vendor/c");
-        assert!(!nested.starts_with(&format!("{outer}/")));
+    fn pin_refs_are_keyed_by_remote_and_rev() {
+        let url = "https://github.com/acme/widgets.git";
+        assert_eq!(pin_ref(url, "main"), pin_ref(url, "main"));
+        assert_ne!(pin_ref(url, "main"), pin_ref(url, "v1.0"));
+        assert_ne!(
+            pin_ref(url, "main"),
+            pin_ref("https://github.com/fork/widgets.git", "main")
+        );
+        // The separator keeps remote/rev boundaries unambiguous.
+        assert_ne!(pin_ref("a", "bc"), pin_ref("ab", "c"));
     }
 
     #[test]

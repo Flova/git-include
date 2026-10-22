@@ -40,7 +40,21 @@ fn run(cli: Cli) -> Result<()> {
 
     let git = Git::discover(Path::new("."))?;
 
-    match cli.command {
+    // Commands that fetch or move pin refs also prune the unused ones.
+    let touches_refs = match &cli.command {
+        Command::Status { fetch, .. } | Command::Diff { fetch, .. } => *fetch,
+        Command::List | Command::Branches { .. } => false,
+        _ => true,
+    };
+    dispatch(&git, cli.command)?;
+    if touches_refs {
+        ops::prune_pin_refs(&git);
+    }
+    Ok(())
+}
+
+fn dispatch(git: &Git, command: Command) -> Result<()> {
+    match command {
         Command::Add {
             remote,
             subdir,
@@ -50,7 +64,7 @@ fn run(cli: Cli) -> Result<()> {
             message,
             no_lfs,
         } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
+            let subdir = repo_relative_subdir(git, &subdir)?;
             let rev = branch
                 .as_deref()
                 .map(|b| (b, git::RevKind::Branch))
@@ -61,7 +75,7 @@ fn run(cli: Cli) -> Result<()> {
                 message: message.as_deref(),
                 no_lfs,
             };
-            ops::add::run(&git, &remote, &subdir, &opts)
+            ops::add::run(git, &remote, &subdir, &opts)
         }
         Command::Pull {
             subdir,
@@ -71,14 +85,14 @@ fn run(cli: Cli) -> Result<()> {
             message,
             no_lfs,
         } => {
-            let subdir = subdir.map(|s| repo_relative_subdir(&git, &s)).transpose()?;
+            let subdir = subdir.map(|s| repo_relative_subdir(git, &s)).transpose()?;
             let opts = ops::pull::PullOptions {
                 force,
                 remote: remote.as_deref(),
                 message: message.as_deref(),
                 no_lfs,
             };
-            ops::pull::run(&git, subdir.as_deref(), all, &opts)
+            ops::pull::run(git, subdir.as_deref(), all, &opts)
         }
         Command::Push {
             subdir,
@@ -90,7 +104,7 @@ fn run(cli: Cli) -> Result<()> {
             message,
             no_lfs,
         } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
+            let subdir = repo_relative_subdir(git, &subdir)?;
             let opts = ops::push::PushOptions {
                 dry_run,
                 squash,
@@ -100,7 +114,7 @@ fn run(cli: Cli) -> Result<()> {
                 message: message.as_deref(),
                 no_lfs,
             };
-            ops::push::run(&git, &subdir, &opts)
+            ops::push::run(git, &subdir, &opts)
         }
         Command::Init {
             subdir,
@@ -108,18 +122,12 @@ fn run(cli: Cli) -> Result<()> {
             branch,
             message,
         } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::init::run(
-                &git,
-                &subdir,
-                &remote,
-                branch.as_deref(),
-                message.as_deref(),
-            )
+            let subdir = repo_relative_subdir(git, &subdir)?;
+            ops::init::run(git, &subdir, &remote, branch.as_deref(), message.as_deref())
         }
         Command::Status { subdir, fetch } => {
-            let subdir = subdir.map(|s| repo_relative_subdir(&git, &s)).transpose()?;
-            ops::status::run(&git, subdir.as_deref(), fetch)
+            let subdir = subdir.map(|s| repo_relative_subdir(git, &s)).transpose()?;
+            ops::status::run(git, subdir.as_deref(), fetch)
         }
         Command::Diff {
             subdir,
@@ -127,8 +135,8 @@ fn run(cli: Cli) -> Result<()> {
             fetch,
             stat,
         } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::diff::run(&git, &subdir, upstream, fetch, stat)
+            let subdir = repo_relative_subdir(git, &subdir)?;
+            ops::diff::run(git, &subdir, upstream, fetch, stat)
         }
         Command::Switch {
             subdir,
@@ -138,14 +146,14 @@ fn run(cli: Cli) -> Result<()> {
             message,
             no_lfs,
         } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
+            let subdir = repo_relative_subdir(git, &subdir)?;
             let opts = ops::pull::PullOptions {
                 force,
                 remote: remote.as_deref(),
                 message: message.as_deref(),
                 no_lfs,
             };
-            ops::branches::switch(&git, &subdir, &rev, &opts)
+            ops::branches::switch(git, &subdir, &rev, &opts)
         }
         Command::Migrate {
             paths,
@@ -154,18 +162,18 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let paths: Vec<String> = paths
                 .iter()
-                .map(|p| repo_relative_subdir(&git, p))
+                .map(|p| repo_relative_subdir(git, p))
                 .collect::<Result<_>>()?;
-            ops::migrate::run(&git, &paths, message.as_deref(), no_lfs)
+            ops::migrate::run(git, &paths, message.as_deref(), no_lfs)
         }
         Command::Branches { subdir } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::branches::list(&git, &subdir)
+            let subdir = repo_relative_subdir(git, &subdir)?;
+            ops::branches::list(git, &subdir)
         }
-        Command::List => ops::list::run(&git),
+        Command::List => ops::list::run(git),
         Command::Remove { subdir, message } => {
-            let subdir = repo_relative_subdir(&git, &subdir)?;
-            ops::remove::run(&git, &subdir, message.as_deref())
+            let subdir = repo_relative_subdir(git, &subdir)?;
+            ops::remove::run(git, &subdir, message.as_deref())
         }
         Command::Completions { .. } | Command::SelfUpdate { .. } => {
             unreachable!("handled above")

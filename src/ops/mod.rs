@@ -10,6 +10,8 @@ pub mod remove;
 pub mod selfupdate;
 pub mod status;
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result, bail};
 
 use crate::git::Git;
@@ -42,7 +44,7 @@ impl<'a> Include<'a> {
     }
 
     pub fn pin_ref(&self) -> String {
-        pin_ref(&self.subdir)
+        pin_ref(&self.meta.remote, &self.meta.branch)
     }
 
     /// Tree of the included directory in HEAD, with the `.gitrepo` marker
@@ -123,6 +125,33 @@ pub fn find_all_includes(git: &Git) -> Result<Vec<String>> {
         .collect();
     dirs.sort();
     Ok(dirs)
+}
+
+/// Delete pin refs no include in the index uses any more (removed or
+/// retargeted includes, and the path-keyed refs of older versions), so they
+/// stop holding upstream objects. Pins are only a local cache: a pruned
+/// one costs at most a refetch, e.g. after switching to a host branch with
+/// other includes. Best effort: if any marker cannot be read, nothing is
+/// pruned rather than risking a pin that is still in use.
+pub fn prune_pin_refs(git: &Git) {
+    let Ok(dirs) = find_all_includes(git) else {
+        return;
+    };
+    let mut keep = HashSet::new();
+    for dir in dirs {
+        match Include::load(git, &dir) {
+            Ok(inc) => keep.insert(inc.pin_ref()),
+            Err(_) => return,
+        };
+    }
+    for name in git.ref_names("refs/include/") {
+        // Scan and push-tmp refs belong to commands in flight.
+        let transient =
+            name.starts_with("refs/include/scan/") || name.starts_with("refs/include/push-tmp-");
+        if !transient && !keep.contains(&name) {
+            git.delete_ref(&name);
+        }
+    }
 }
 
 /// The default template for sync commit messages (see [`commit_message`]).

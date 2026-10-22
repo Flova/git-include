@@ -45,7 +45,7 @@ pub fn run(git: &Git, remote: &str, subdir: &str, opts: &AddOptions<'_>) -> Resu
     };
 
     eprintln!("Fetching {remote} ({rev}) ...");
-    let (commit, kind) = git.fetch_rev(remote, &rev, expect, &pin_ref(subdir))?;
+    let (commit, kind) = git.fetch_rev(remote, &rev, expect, &pin_ref(remote, &rev))?;
 
     let mut meta = GitRepoFile::new(remote, &rev, &commit, Some(&head));
     meta.ref_kind_hint = Some(kind);

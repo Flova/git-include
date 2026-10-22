@@ -6,7 +6,7 @@ use crate::git::{Git, looks_like_oid};
 use crate::gitrepo::{GitRepoFile, MARKER_FILE};
 use crate::lfs;
 use crate::ops::{Include, commit_message};
-use crate::util::short;
+use crate::util::{pin_ref, short};
 
 /// The rebuilt upstream history a push would create: a 1:1 image of the
 /// host commits since the marker's `parent`, restricted to the included
@@ -431,7 +431,7 @@ pub fn run(git: &Git, subdir: &str, opts: &PushOptions<'_>) -> Result<()> {
         return Ok(());
     }
 
-    git.set_ref(&inc.pin_ref(), &tip)?;
+    git.set_ref(&pin_ref(&target_remote, &target_branch), &tip)?;
 
     // Record the new upstream position in the marker file (one bookkeeping
     // commit; a no-op for future replays since the content is unchanged).
