@@ -78,7 +78,7 @@ pub fn run(
     git.apply_tree_prefix(&root, subdir)?;
     git.commit_on_head(&commit_message(git, message, "init", subdir, &meta), &root)?;
     // Pin the extracted history so it survives `git gc` until pushed.
-    git.set_ref(&pin_ref(subdir), &tip)?;
+    git.set_ref(&pin_ref(remote, &branch), &tip)?;
 
     println!(
         "Turned '{subdir}' into an included repository: extracted {count} commit(s) \

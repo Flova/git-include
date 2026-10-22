@@ -1628,6 +1628,114 @@ fn remove_deletes_include_and_commits() {
     assert!(out.contains("No included repositories"), "got: {out}");
 }
 
+fn include_refs(repo: &std::path::Path) -> Vec<String> {
+    git_in(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "refs/include/"],
+    )
+    .lines()
+    .map(str::to_string)
+    .collect()
+}
+
+#[test]
+fn reused_directory_never_reads_the_previous_upstreams_pin() {
+    let env = TestEnv::new();
+    let (a_url, a) = env.upstream("alpha");
+    let (b_url, _b) = env.upstream("beta");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &a_url, "vendor/x"]);
+    include_ok(&host, &["add", &b_url, "vendor/y"]);
+    // alpha moves on, and its pin learns about it.
+    upstream_commit(&a, "more.txt", "more\n", "alpha: more");
+    include_ok(&host, &["status", "--fetch", "vendor/x"]);
+
+    // Plain git (no `git include remove`): alpha's directory is deleted
+    // and beta is moved into it.
+    git_in(&host, &["rm", "-q", "-r", "vendor/x"]);
+    git_in(&host, &["commit", "-q", "-m", "drop alpha"]);
+    git_in(&host, &["mv", "vendor/y", "vendor/x"]);
+    git_in(&host, &["commit", "-q", "-m", "move beta"]);
+
+    // Offline status must report beta's state, not alpha's new commit.
+    let s = include_ok(&host, &["status", "vendor/x"]);
+    assert!(s.contains("upstream: up to date"), "got: {s}");
+
+    // The next ref-touching command prunes alpha's orphaned pin.
+    assert_eq!(include_refs(&host).len(), 2);
+    include_ok(&host, &["status", "--fetch", "vendor/x"]);
+    assert_eq!(include_refs(&host), vec![pin_of(&host, "vendor/x")]);
+}
+
+#[test]
+fn includes_of_the_same_upstream_share_a_pin_that_survives_removing_one() {
+    let env = TestEnv::new();
+    let (url, up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "one"]);
+    include_ok(&host, &["add", &url, "two"]);
+    assert_eq!(include_refs(&host).len(), 1);
+
+    upstream_commit(&up, "new.txt", "new\n", "lib: new");
+    include_ok(&host, &["status", "--fetch", "one"]);
+    include_ok(&host, &["remove", "one"]);
+    let s = include_ok(&host, &["status", "two"]);
+    assert!(s.contains("1 new commit(s) available"), "got: {s}");
+
+    include_ok(&host, &["remove", "two"]);
+    assert!(include_refs(&host).is_empty());
+}
+
+#[test]
+fn moved_include_keeps_its_pin_and_legacy_pins_are_pruned() {
+    let env = TestEnv::new();
+    let (url, up) = env.upstream("lib");
+    let host = env.work_repo("host");
+    include_ok(&host, &["add", &url, "vendor/lib"]);
+    upstream_commit(&up, "new.txt", "new\n", "lib: new");
+    include_ok(&host, &["status", "--fetch"]);
+
+    std::fs::create_dir(host.join("third_party")).unwrap();
+    git_in(&host, &["mv", "vendor/lib", "third_party/lib"]);
+    git_in(&host, &["commit", "-q", "-m", "move lib"]);
+    let s = include_ok(&host, &["status", "third_party/lib"]);
+    assert!(s.contains("1 new commit(s) available"), "got: {s}");
+
+    // A path-keyed pin as written by older versions goes away.
+    let head = git_in(&host, &["rev-parse", "HEAD"]);
+    git_in(
+        &host,
+        &["update-ref", "refs/include/third_party--lib", &head],
+    );
+    include_ok(&host, &["pull", "third_party/lib"]);
+    assert_eq!(include_refs(&host), vec![pin_of(&host, "third_party/lib")]);
+}
+
+/// The pin ref of the include in `dir`, as the only `refs/include/upstream/`
+/// ref whose commit is that include's recorded upstream commit.
+fn pin_of(host: &std::path::Path, dir: &str) -> String {
+    let marker = read(host, &format!("{dir}/.gitrepo"));
+    let commit = marker
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("commit = "))
+        .expect("marker has a commit")
+        .to_string();
+    let refs = git_in(
+        host,
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname)",
+            "refs/include/upstream/",
+        ],
+    );
+    let found: Vec<&str> = refs
+        .lines()
+        .filter_map(|l| l.strip_prefix(&format!("{commit} ")))
+        .collect();
+    assert_eq!(found.len(), 1, "refs: {refs}");
+    found[0].to_string()
+}
+
 // ------------------------------------------------------------ various ----
 
 #[test]

@@ -15,7 +15,6 @@ pub fn run(git: &Git, subdir: &str, message: Option<&str>) -> Result<()> {
         &commit_message(git, message, "remove", subdir, &inc.meta),
         &root,
     )?;
-    git.delete_ref(&inc.pin_ref());
 
     println!(
         "Removed included repository '{subdir}' (upstream {} untouched).",

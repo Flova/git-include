@@ -372,19 +372,22 @@ impl Git {
 
     /// Remove the temporary refs used when scanning a remote for a commit.
     fn delete_scan_refs(&self) {
-        let names: Vec<String> = self
-            .repo
+        for name in self.ref_names("refs/include/scan/") {
+            self.delete_ref(&name);
+        }
+    }
+
+    /// Names of all local refs starting with `prefix`.
+    pub fn ref_names(&self, prefix: &str) -> Vec<String> {
+        self.repo
             .references()
             .map(|refs| {
                 refs.filter_map(|r| r.ok())
                     .filter_map(|r| r.name().ok().map(str::to_string))
-                    .filter(|n| n.starts_with("refs/include/scan/"))
+                    .filter(|n| n.starts_with(prefix))
                     .collect()
             })
-            .unwrap_or_default();
-        for name in names {
-            self.delete_ref(&name);
-        }
+            .unwrap_or_default()
     }
 
     /// Best-effort fetch of a single commit by id (used to recover base
