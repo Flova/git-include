@@ -519,12 +519,8 @@ remotes, no temporary branches. All of it runs in-process through libgit2
   work becomes a real merge with upstream). Only the include's *own* marker
   is stripped; nested `.gitrepo` files are content and travel upstream
   intact.
-- Fetched upstream heads are pinned under
-  `refs/include/upstream/<repo>-<hash of remote and ref>` so `status` and
-  `diff` work offline and fetched objects survive `git gc`. Pins are keyed
-  by upstream, not by directory, so moving an include keeps its pin and a
-  reused directory never sees a stale one. Commands that fetch prune pins
-  no include uses any more.
+- Fetched upstream heads are cached as local refs under
+  `refs/include/upstream/` for offline `status` and `diff`.
 
 One subtle case is handled explicitly: a fresh clone of the host repository
 has the vendored *trees and blobs* (they're reachable from host commits)
